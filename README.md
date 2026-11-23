@@ -19,10 +19,10 @@
 
 <p align="center"><sub>One task of a campaign: the lineage of its sessions, the best-so-far curve and the details of s004 on the left; s004's TraceVista analysis, its state map and story, on the right.</sub></p>
 
-EvolveVista is the watch page of [InfiniEvolve](https://github.com/xiemeimeiaaa/InfiniEvolve). InfiniEvolve runs
+EvolveVista is the watch page of [InfiniEvolve](https://github.com/InfiniEvolve/InfiniEvolve). InfiniEvolve runs
 coding-agent sessions one after another, each starting from earlier work, and archives every one; EvolveVista
 reads that archive while the campaign runs, shows how each session compares with the one it started from, and
-opens any session's trajectory in [TraceVista](https://github.com/Superone77/TraceVista). It never runs a
+opens any session's trajectory in [TraceVista](https://github.com/InfiniEvolve/TraceVista). It never runs a
 session or changes the campaign: the only files it writes are the analyses you ask for, under the campaign's
 `vista/`.
 
@@ -137,7 +137,7 @@ only when you ask for one. It needs Python 3.10 or newer and no packages.
 
 ## TraceVista
 
-[TraceVista](https://github.com/Superone77/TraceVista) is a git submodule in `third_party/TraceVista`, used as it
+[TraceVista](https://github.com/InfiniEvolve/TraceVista) is a git submodule in `third_party/TraceVista`, used as it
 is, never copied into this repository:
 
 - the page imports its graph model, model providers, language switch and styles from its source

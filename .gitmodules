@@ -1,4 +1,4 @@
 [submodule "third_party/TraceVista"]
 	path = third_party/TraceVista
-	url = https://github.com/xiemeimeiaaa/TraceVista.git
+	url = https://github.com/InfiniEvolve/TraceVista.git
 	branch = main

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext", "moduleResolution": "bundler", "jsx": "react-jsx",
+    "types": ["vite/client", "node"], "resolveJsonModule": true,
+    "strict": true, "skipLibCheck": true, "noEmit": true,
+    "verbatimModuleSyntax": true, "erasableSyntaxOnly": true,
+    "noUnusedLocals": true, "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true, "noUncheckedSideEffectImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@tracevista/*": ["../third_party/TraceVista/viewer/src/trajectory/*"],
+      "@tracevista-skill/*": ["../third_party/TraceVista/skills/tracevista-skill/*"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

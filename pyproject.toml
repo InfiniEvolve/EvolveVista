@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evolve-vista"
+version = "0.1.0"
+description = "Follow an InfiniEvolve campaign in the browser and open any session as a TraceVista analysis"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# InfiniEvolve's own snapshot of its campaigns; without it the page reads the campaign directory itself.
+infinievolve = ["infinievolve"]
+
+[project.scripts]
+evolve-vista = "evolve_vista.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["evolve_vista*"]
+
+[tool.setuptools.package-data]
+# built by `npm run build` and committed, so that installing needs no Node: the page, TraceVista's trajectory
+# viewer, and the TraceVista skill
+evolve_vista = ["static/*", "static/assets/*", "tracevista_skill/LICENSE", "tracevista_skill/SKILL.md",
+                "tracevista_skill/references/*.md", "tracevista_skill/scripts/*.py"]

@@ -3,10 +3,14 @@
 A Claude Code transcript names each model call by its request_id. When the agent talks to its model through
 OpenRouter, that id is OpenRouter's generation id ("gen-..."), and OpenRouter's generation endpoint says how the
 call went: its latency (time to first token), how long the answer took, how many tokens it had, which provider
-served it. This module finds the ids in the agent log as it grows and asks OpenRouter about each, with the key in
+served it, and what it cost (in US dollars). This module finds the ids in the agent log as it grows and asks OpenRouter about each, with the key in
 OPENROUTER_API_KEY. The key stays in this server: the page gets the numbers only.
 
-    point = {"id", "time", "ttft" (ms), "gen" (ms), "tokens", "tps", "provider", "finish", "sub"}
+    point = {"id", "time", "ttft" (ms), "gen" (ms), "tokens", "tps", "provider", "finish", "cost" (USD), "sub"}
+
+A session's cost is the sum of its calls' costs: what OpenRouter charged, unlike the cost Claude Code reports,
+which prices the calls with its own table and is missing for a session that has not ended. The server follows
+every session of the campaign for this (costs()), not only those a page shows.
 
 tps is tokens / generation time: OpenRouter's generation time already leaves the time to first token out.
 OpenRouter has a call's numbers a few seconds after it ends, so a lookup that finds none is tried again later,
@@ -74,7 +78,10 @@ def point(generation: str, data: dict, when: str | None, sub: bool) -> dict | No
     tokens = number("native_tokens_completion")
     if tokens is None:
         tokens = number("tokens_completion")
-    if ttft is None and gen is None:
+    cost = number("usage")
+    if cost is None:
+        cost = number("total_cost")
+    if ttft is None and gen is None and cost is None:
         return None
     providers = data.get("provider_responses")
     provider = data.get("provider_name")
@@ -83,7 +90,8 @@ def point(generation: str, data: dict, when: str | None, sub: bool) -> dict | No
     return {"id": generation, "time": when or data.get("created_at"), "ttft": ttft, "gen": gen, "tokens": tokens,
             "tps": round(tokens / (gen / 1000), 1) if tokens and gen else None,
             "provider": provider if isinstance(provider, str) else None,
-            "finish": data.get("finish_reason") if isinstance(data.get("finish_reason"), str) else None, "sub": sub}
+            "finish": data.get("finish_reason") if isinstance(data.get("finish_reason"), str) else None, "cost": cost,
+            "sub": sub}
 
 
 def calls(data: bytes) -> list:
@@ -145,7 +153,8 @@ class Session:
                 return
             now = time.monotonic()
             for rid in self.order:
-                if rid in self.points or rid in self.missing or rid in self.running:
+                # a point kept before costs were recorded is asked about once more, for its cost
+                if rid in self.missing or rid in self.running or (rid in self.points and "cost" in self.points[rid]):
                     continue
                 if self.tries.get(rid, (0, 0))[1] > now or self.stats.paused_until > now:
                     continue
@@ -171,6 +180,9 @@ class Session:
                 self.stats.refused = True
             elif found:
                 self.points[rid] = found
+                self._save()
+            elif rid in self.points:   # OpenRouter no longer has a kept call: keep its timings, its cost unknown
+                self.points[rid] = {**self.points[rid], "cost": None}
                 self._save()
             elif not busy:   # a call turned away for too many requests is tried again as it was
                 tries = self.tries.get(rid, (0, 0))[0]
@@ -201,8 +213,15 @@ class Session:
         """The points found, in call order, and how many calls still wait for their numbers."""
         with self.lock:
             shown = [self.points[rid] for rid in self.order if rid in self.points]
+            costs = [p["cost"] for p in shown if isinstance(p.get("cost"), (int, float))]
             return {"state": self.state(), "calls": len(self.order), "points": shown,
-                    "waiting": len(self.order) - len(shown) - len(self.missing), "missing": len(self.missing)}
+                    "waiting": len(self.order) - len(shown) - len(self.missing), "missing": len(self.missing),
+                    "cost": round(sum(costs), 6), "priced": len(costs)}
+
+    def summary(self) -> dict:
+        """The session's cost so far: priced is how many of its calls it adds up; the rest are unknown yet."""
+        view = self.view()
+        return {k: view[k] for k in ("state", "calls", "waiting", "cost", "priced")}
 
 
 class ApiStats:
@@ -225,3 +244,22 @@ class ApiStats:
                 log = vista.agent_log(path) or path / vista.LOGS[0]
                 self.sessions[key] = Session(self, log, vista.store(root, task, session) / CACHE)
             return self.sessions[key]
+
+    def costs(self, root: Path) -> dict:
+        """Every session of the campaign that ran an agent, its cost so far, and the campaign's: what was priced."""
+        sessions = {}
+        tasks = root / "tasks"
+        for path in sorted(tasks.glob("*/sessions/*")) if tasks.is_dir() else ():
+            task, session = path.parent.parent.name, path.name
+            if not (vista.NAME.match(task) and vista.NAME.match(session) and vista.agent_log(path)):
+                continue
+            calls = self.session(root, task, session)
+            try:
+                calls.advance()
+            except OSError:
+                pass
+            sessions[f"{task}/{session}"] = calls.summary()
+        priced = [s for s in sessions.values() if s["priced"]]
+        state = "no-key" if not self.key else "refused" if self.refused else "ok"
+        return {"state": state, "sessions": sessions, "cost": round(sum(s["cost"] for s in priced), 6),
+                "complete": all(s["priced"] == s["calls"] for s in priced)}

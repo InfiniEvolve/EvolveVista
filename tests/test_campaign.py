@@ -552,7 +552,7 @@ class FakeOpenRouter:
                 return None   # OpenRouter has no numbers for a call this fresh
         n = int(generation.split("-")[1])
         return {"id": generation, "latency": 500 + n, "generation_time": 2000, "native_tokens_completion": 100 * n,
-                "created_at": "2026-11-26T22:00:00Z", "finish_reason": "tool_calls",
+                "created_at": "2026-11-26T22:00:00Z", "finish_reason": "tool_calls", "usage": n / 1000,
                 "provider_responses": [{"provider_name": "Old"}, {"provider_name": "Inkling"}]}
 
 
@@ -594,8 +594,9 @@ class ApiStatsTest(ServerTest):
     def test_a_point_is_ttft_and_tokens_over_generation_time(self):
         p = self.apistats.point("gen-3", FakeOpenRouter()("gen-3", "k"), "2026-11-26T22:00:03.000Z", False)
         self.assertEqual(p, {"id": "gen-3", "time": "2026-11-26T22:00:03.000Z", "ttft": 503, "gen": 2000, "tokens": 300,
-                             "tps": 150.0, "provider": "Inkling", "finish": "tool_calls", "sub": False})
+                             "tps": 150.0, "provider": "Inkling", "finish": "tool_calls", "cost": 0.003, "sub": False})
         self.assertIsNone(self.apistats.point("gen-3", {"id": "gen-3"}, None, False), "no timings, no point")
+        self.assertEqual(self.apistats.point("gen-3", {"latency": 1, "total_cost": 0.5}, None, False)["cost"], 0.5)
 
     def test_lookups_wait_for_the_numbers_back_off_and_are_kept(self):
         fake = FakeOpenRouter(ready=3, busy_once=True)
@@ -671,6 +672,63 @@ class ApiStatsTest(ServerTest):
         self.assertEqual(seen, ["gen-1", "gen-2", "gen-3"], "nothing sent twice")
         self.assertEqual((batch["state"], batch["calls"]), ("ok", 3))
         self.assertNotIn("or-key", json.dumps(batch))
+
+    def test_a_session_costs_what_openrouter_charged_for_its_calls(self):
+        self.use(FakeOpenRouter(ready=2))
+        self.append(gen(1), gen(2), gen(3))
+        calls = self.server.api_stats.session(self.campaign, "golf", "s004")
+        calls.advance()
+        early = calls.summary()
+        self.assertEqual((early["calls"], early["priced"], early["cost"]), (3, 0, 0), "nothing priced before OpenRouter answers")
+        self.settle(calls, lambda v: v["priced"] == 3)
+        self.assertEqual(calls.summary(), {"state": "ok", "calls": 3, "waiting": 0, "cost": 0.006, "priced": 3})
+
+    def test_numbers_kept_before_costs_were_recorded_are_asked_about_once_more(self):
+        kept = self.campaign / "vista" / "golf" / "s004" / "api-stats.json"
+        write(kept, {"points": [{"id": f"gen-{n}", "time": None, "ttft": 1, "gen": 2, "tokens": 3, "tps": 1500.0,
+                                 "provider": "Old", "finish": "stop", "sub": False} for n in (1, 2)]})
+        fake = FakeOpenRouter()
+        self.use(fake)
+        self.append(gen(1), gen(2))
+        calls = self.server.api_stats.session(self.campaign, "golf", "s004")
+        calls.advance()
+        self.assertEqual(len(calls.view()["points"]), 2, "the kept timings show at once")
+        view = self.settle(calls, lambda v: v["priced"] == 2)
+        self.assertEqual((view["cost"], sorted(fake.asked)), (0.003, ["gen-1", "gen-2"]))
+        self.assertTrue(all("cost" in p for p in json.loads(kept.read_text())["points"]))
+        calls.advance()
+        self.assertEqual(len(fake.asked), 2, "asked once, not again")
+
+    def test_the_campaign_total_counts_every_session_that_ran_an_agent(self):
+        import http.client
+        self.use(FakeOpenRouter())
+        self.append(gen(1), gen(2))
+        other = self.campaign / "tasks" / "golf" / "sessions" / "s003" / "raw" / "agent.jsonl"
+        other.parent.mkdir(parents=True)
+        other.write_text(json.dumps(gen(4)) + "\n")
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+        connection.request("GET", "/api/campaign/api-costs?token=t0ken")
+        response = connection.getresponse()
+        self.addCleanup(connection.close)
+        self.assertEqual(response.status, 200)
+        while True:
+            line = response.fp.readline().decode()
+            if line.startswith("data: "):
+                costs = json.loads(line[6:])
+                if costs["complete"] and len(costs["sessions"]) == 2 and costs["cost"]:
+                    break
+        self.assertEqual(sorted(costs["sessions"]), ["golf/s003", "golf/s004"], "the baseline ran no agent")
+        self.assertEqual((costs["sessions"]["golf/s004"]["cost"], costs["sessions"]["golf/s003"]["cost"], costs["cost"]),
+                         (0.003, 0.004, 0.007))
+        self.assertEqual(self.get("/api/campaign/api-costs?token=wrong")[0], 403)
+
+    def test_without_a_key_the_cost_stays_claude_codes(self):
+        self.use(FakeOpenRouter(), key="")
+        self.append(gen(1))
+        costs = self.server.api_stats.costs(self.campaign)
+        self.assertEqual((costs["state"], costs["cost"], costs["sessions"]["golf/s004"]["priced"]), ("no-key", 0, 0),
+                         "nothing priced: the page keeps the cost the snapshot reports")
+        self.assertEqual(snapshot(self.campaign)["tasks"][0]["nodes"][1]["cost"], 0.5)
 
     def test_what_the_api_stats_stream_refuses(self):
         self.assertEqual(self.get("/api/campaign/agent-api-stats?task=golf&session=s004")[0], 403, "no token")

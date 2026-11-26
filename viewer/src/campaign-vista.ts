@@ -38,9 +38,10 @@ export interface BuildResult { ok: boolean; error?: string }
 export interface LogEntry { kind: 'text' | 'thinking' | 'tool' | 'result' | 'error' | 'system' | 'done'; text: string; tool?: string; sub?: boolean }
 /** One call of the agent to its model, as OpenRouter measured it: ttft and gen in ms, tps over the generation time. */
 export interface ApiPoint { id: string; time: string | null; ttft: number | null; gen: number | null; tokens: number | null; tps: number | null;
-  provider: string | null; finish: string | null; sub: boolean }
+  provider: string | null; finish: string | null; cost?: number | null; sub: boolean }
 /** What the server knows of a session's model calls; points are only those new to this connection. */
-export interface ApiStats { state: 'ok' | 'no-key' | 'not-openrouter' | 'refused'; calls: number; waiting: number; missing: number; points: ApiPoint[] }
+export interface ApiStats { state: 'ok' | 'no-key' | 'not-openrouter' | 'refused'; calls: number; waiting: number; missing: number; points: ApiPoint[];
+  /** what OpenRouter charged for the priced calls, in USD */ cost: number; priced: number }
 /** A session's agent log as it grows: batches of entries (server-sent events; the token rides in the address). */
 export const agentLogUrl = (token: string, task: string, session: string) =>
   `/api/campaign/agent-log?${new URLSearchParams({ token, task, session })}`;

@@ -134,6 +134,10 @@ class Handler(BaseHTTPRequestHandler):
             if not secrets.compare_digest((query.get("token") or [""])[0], self.server.token):
                 self.respond(403, b'{"error":"Open the address the watch command printed"}'); return
             self.agent_log(query); return
+        if url.path == "/api/campaign/api-costs":
+            if not secrets.compare_digest((parse_qs(url.query).get("token") or [""])[0], self.server.token):
+                self.respond(403, b'{"error":"Open the address the watch command printed"}'); return
+            self.api_costs(); return
         if url.path == "/api/campaign/agent-api-stats":
             query = parse_qs(url.query)
             if not secrets.compare_digest((query.get("token") or [""])[0], self.server.token):
@@ -240,6 +244,30 @@ class Handler(BaseHTTPRequestHandler):
                     quiet = time.monotonic()
                 if not (moved and log.stat().st_size > offset):   # more to read at once, else wait
                     self.server.closing.wait(CHECK_SECONDS)
+        except OSError:
+            pass   # the page went away
+
+    def api_costs(self):
+        """What OpenRouter charged for each session of the campaign so far, and in all: sent when it changes."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        last, quiet = None, time.monotonic()
+        try:
+            self.wfile.write(b"retry: 3000\n\n"); self.wfile.flush()
+            while not self.server.closing.is_set():
+                try:
+                    data = json.dumps(self.server.api_stats.costs(self.server.campaign), ensure_ascii=False).encode()
+                except OSError:
+                    data = None
+                if data and data != last:
+                    self.wfile.write(b"event: costs\ndata: " + data + b"\n\n"); self.wfile.flush()
+                    last, quiet = data, time.monotonic()
+                elif time.monotonic() - quiet > KEEPALIVE_SECONDS:
+                    self.wfile.write(b": keepalive\n\n"); self.wfile.flush()
+                    quiet = time.monotonic()
+                self.server.closing.wait(CHECK_SECONDS)
         except OSError:
             pass   # the page went away
 

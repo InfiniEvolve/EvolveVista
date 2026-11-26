@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ApiPoint, ApiStats, VistaApi } from './campaign-vista';
 import { useLang } from './i18n';
+import { usd } from './campaign';
 
 const MAX_POINTS = 5000;   // two hours at a call every second or two
 const WINDOW = 15;         // calls in the rolling line
@@ -87,7 +88,7 @@ function MetricChart({ points, measure }: { points: ApiPoint[]; measure: Measure
         <div>{held.p.time ? new Date(timeOf(held.p, 0)).toLocaleTimeString() : held.p.id}{held.p.sub ? ` · ${t('subagent')}` : ''}</div>
         <div>{t('TTFT')} <b>{held.p.ttft !== null ? seconds(held.p.ttft) : '—'}</b> · {t('TPS')} <b>{held.p.tps ?? '—'}</b></div>
         <div>{t('{n} tokens in {time}', { n: (held.p.tokens ?? 0).toLocaleString(), time: held.p.gen !== null ? seconds(held.p.gen) : '—' })}</div>
-        <div className="api-tip-meta">{[held.p.provider, held.p.finish].filter(Boolean).join(' · ')}</div>
+        <div className="api-tip-meta">{[held.p.provider, held.p.finish, held.p.cost != null ? usd(held.p.cost) : null].filter(Boolean).join(' · ')}</div>
       </div>}
     </div></div>;
 }
@@ -111,7 +112,7 @@ export default function ApiCharts({ api, task, session }: { api: VistaApi; task:
         return all.slice(-MAX_POINTS);
       });
     });
-    source.onerror = () => { if (source.readyState === EventSource.CLOSED) setInfo(i => i ?? { state: 'absent', calls: 0, waiting: 0, missing: 0 }); };
+    source.onerror = () => { if (source.readyState === EventSource.CLOSED) setInfo(i => i ?? { state: 'absent', calls: 0, waiting: 0, missing: 0, cost: 0, priced: 0 }); };
     return () => source.close();
   }, [api, task, session]);
   const measures = useMemo<Measure[]>(() => [
@@ -129,7 +130,8 @@ export default function ApiCharts({ api, task, session }: { api: VistaApi; task:
     : t('This server does not look up API stats. Restart it with the current version to see them.')}</p>;
   return <section className="api-charts" aria-label={t('Model answer times')}>
     {measures.map(m => <MetricChart key={m.key} points={points} measure={m} />)}
-    <p className="api-foot">{t('{calls} model calls; each dot is one, larger for more tokens. Measured by OpenRouter.', { calls: info.calls.toLocaleString() })}
+    <p className="api-foot">{info.priced > 0 && <b className="api-cost">{t('{cost} so far', { cost: (info.priced < info.calls ? '≥ ' : '') + usd(info.cost) })}</b>}
+      {t('{calls} model calls; each dot is one, larger for more tokens. Measured by OpenRouter.', { calls: info.calls.toLocaleString() })}
       {info.waiting > 0 && <> {t('{n} waiting for their numbers.', { n: info.waiting })}</>}</p>
   </section>;
 }

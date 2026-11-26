@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { LangProvider, LangToggle, useLang } from './i18n';
-import { bestCurve, bestNode, firstTask, layoutTree, parseSnapshot, referenceNode, taskStatus, ticks, tickText, versusParent,
-  type CampaignNode, type CampaignSnapshot, type CampaignTask, type Change, type TaskStatus } from './campaign';
+import { bestCurve, bestNode, firstTask, layoutTree, parseSnapshot, referenceNode, sessionCost, taskStatus, ticks, tickText, usd, versusParent,
+  type ApiCost, type ApiCosts, type CampaignNode, type CampaignSnapshot, type CampaignTask, type Change, type TaskStatus } from './campaign';
 import '@tracevista/trajectory.css';
 import '@tracevista/interface.css';
 import './campaign.css';
@@ -241,9 +241,10 @@ function Report({ text }: { text: string }) {
   })}</div>;
 }
 
-function Details({ task, node, onSelect, onClose, place, onMove }: { task: CampaignTask; node: CampaignNode; onSelect: (id: string) => void;
-  onClose: () => void; place: Place | null; onMove: (p: Place | null) => void }) {
+function Details({ task, node, onSelect, onClose, place, onMove, apiCost }: { task: CampaignTask; node: CampaignNode; onSelect: (id: string) => void;
+  onClose: () => void; place: Place | null; onMove: (p: Place | null) => void; apiCost?: ApiCost | null }) {
   const { t } = useLang();
+  const cost = sessionCost(node, apiCost);
   const isBest = bestNode(task)?.id === node.id;
   const v = versusParent(task, node);
   const children = task.nodes.filter(n => n.parent === node.id);
@@ -311,7 +312,8 @@ function Details({ task, node, onSelect, onClose, place, onMove }: { task: Campa
       <div className="float-tiles">
         <div><span>{t('Agent time')}</span><b>{minutes(node.agentSeconds)}</b></div>
         <div><span>{t('Wall time')}</span><b>{minutes(node.wallSeconds)}</b></div>
-        <div><span>{t('Cost')}</span><b>{node.cost != null ? `$${node.cost.toFixed(2)}` : '-'}</b></div>
+        <div title={cost.source === 'openrouter' ? t('What OpenRouter charged for this session’s model calls so far') : undefined}>
+          <span>{cost.source === 'openrouter' ? t('Cost (OpenRouter)') : t('Cost')}</span><b>{cost.text}</b></div>
       </div>
       {Object.keys(node.metrics).length > 0 && <><h3>{t('Measurements')}</h3>
         <table className="campaign-metrics"><tbody>
@@ -415,6 +417,15 @@ function Campaign() {
     stream.onerror = () => setError(t('Disconnected; reconnecting. The last view is kept.'));
     return () => stream.close();
   }, [paused, token, t]);
+  // What OpenRouter charged each session so far, when the server looks it up (it holds the key, the page never).
+  const [costs, setCosts] = useState<ApiCosts | null>(null);
+  useEffect(() => {
+    if (paused || !token) return;
+    const stream = new EventSource(`/api/campaign/api-costs?token=${encodeURIComponent(token)}`);
+    stream.addEventListener('costs', event => { try { setCosts(JSON.parse((event as MessageEvent<string>).data)); } catch { /* the next one */ } });
+    stream.onerror = () => { if (stream.readyState === EventSource.CLOSED) setCosts(null); };   // a server without the route
+    return () => stream.close();
+  }, [paused, token]);
 
   const tasks = data?.tasks ?? [];
   const shown = tasks.filter(x => x.name.toLowerCase().includes(filter.trim().toLowerCase()));
@@ -453,7 +464,7 @@ function Campaign() {
   const close = useCallback(() => { setChosen(null); setPlace(null); }, []);
   const stage = useRef<HTMLDivElement>(null);
   const details = chosenTask && chosenNode && <Details task={chosenTask} node={chosenNode} onSelect={id => pick(chosenTask.name, id)}
-    onClose={close} place={place} onMove={setPlace} />;
+    onClose={close} place={place} onMove={setPlace} apiCost={costs?.sessions[`${chosenTask.name}/${chosenNode.id}`]} />;
   const switchTo = (name: string) => {
     if (name !== shownTask?.name) { close(); stage.current?.scrollTo({ top: 0 }); }
     setCurrent(name);
@@ -468,6 +479,8 @@ function Campaign() {
         <div className="campaign-name"><a className="brand" href="./">EvolveVista</a><span aria-hidden="true">/</span>
           <h1>{data?.campaign ?? t('InfiniEvolve campaign')}</h1></div>
         <p className="campaign-meta">{data ? <><TaskCounts tasks={tasks} />
+          {costs?.state === 'ok' && costs.cost > 0 && <span className="campaign-cost" title={t('What OpenRouter charged for the model calls of every session so far')}>
+            {t('{cost} on OpenRouter', { cost: (costs.complete ? '' : '≥ ') + usd(costs.cost) })}</span>}
           {error ? <span className="campaign-alert bad" title={error}>{t('Disconnected')}</span>
             : paused ? <span className="campaign-alert">{t('View frozen')}</span>
             : changed && <small>{t('updated {time}', { time: changed.toLocaleTimeString() })}</small>}</>

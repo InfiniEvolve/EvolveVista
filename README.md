@@ -153,6 +153,13 @@ It keeps what it found in `<campaign>/vista/<task>/<session>/api-stats.json`, so
 Without the key, or for an agent whose ids are not OpenRouter's, the area says so in a line and the log takes
 the whole area. A finished session's charts work the same way, without new points.
 
+**What a session cost.** OpenRouter also says what it charged for each call. The server adds these up for
+every session of the campaign that ran an agent, not only the one in view. A session's details then show
+**Cost (OpenRouter)** instead of the cost Claude Code reports at the end. Claude Code prices an OpenRouter
+model with its own price table, and it reports nothing for a session that has not ended. The page header shows
+the campaign's total. While some calls are not priced yet, both read "≥". Without OpenRouter numbers, the
+details keep Claude Code's cost.
+
 ## How it works
 
 **Reading a campaign.** The page reads a campaign with InfiniEvolve's own snapshot (`infinievolve.snapshot`),

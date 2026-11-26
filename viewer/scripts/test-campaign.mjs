@@ -73,3 +73,14 @@ assert.equal(c.taskStatus({ ...t, nodes: t.nodes.slice(0, 6), stopped: 'done' })
 assert.equal(c.taskStatus({ ...lower, paused: 'job failed' }), 'paused');
 assert.equal(c.firstTask({ tasks: [{ ...lower, name: 'a', stopped: 'done' }, { ...running, name: 'b' }] }).name, 'b');
 console.log('PASS: campaign lineage layout, comparisons, best-so-far curve and axis ticks');
+
+// The cost a session's details show: OpenRouter's sum when any call is priced, else Claude Code's own.
+const costly = node('s001', 's000', 2, { cost: 1.234 });
+assert.deepEqual(c.sessionCost(costly, { state: 'ok', calls: 10, waiting: 0, cost: 0.4567, priced: 10 }), { text: '$0.457', source: 'openrouter' });
+assert.deepEqual(c.sessionCost(costly, { state: 'ok', calls: 10, waiting: 3, cost: 0.2, priced: 7 }), { text: '≥ $0.200', source: 'openrouter' },
+  'at least that much while some calls are not priced yet');
+assert.deepEqual(c.sessionCost(costly, { state: 'no-key', calls: 10, waiting: 0, cost: 0, priced: 0 }), { text: '$1.23', source: 'agent' },
+  'nothing priced: the cost Claude Code reported');
+assert.deepEqual(c.sessionCost(node('s002', 's000', 2), null), { text: '-', source: null });
+assert.equal(c.usd(12.345), '$12.35');
+console.log('PASS: a session’s cost, OpenRouter’s first');

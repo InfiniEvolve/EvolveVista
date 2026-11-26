@@ -145,5 +145,10 @@
  "Model answer times": "模型响应时间",
  "{calls} model calls; each dot is one, larger for more tokens. Measured by OpenRouter.": "共 {calls} 次模型调用；每个点是一次，token 越多点越大。数据来自 OpenRouter。",
  "{n} waiting for their numbers.": "{n} 次还在等数据。",
- "This server does not look up API stats. Restart it with the current version to see them.": "这个服务器不查询 API 统计。用当前版本重启它就能看到。"
+ "This server does not look up API stats. Restart it with the current version to see them.": "这个服务器不查询 API 统计。用当前版本重启它就能看到。",
+ "What OpenRouter charged for this session’s model calls so far": "OpenRouter 到目前为止为这个会话的模型调用收取的费用",
+ "Cost (OpenRouter)": "费用（OpenRouter）",
+ "What OpenRouter charged for the model calls of every session so far": "OpenRouter 到目前为止为所有会话的模型调用收取的费用",
+ "{cost} on OpenRouter": "OpenRouter 费用 {cost}",
+ "{cost} so far": "目前 {cost}"
 }

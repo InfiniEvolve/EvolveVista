@@ -151,3 +151,18 @@ export function tickText(v: number): string {
   if (a >= 1000 || a < 0.01) return v.toExponential(0).replace('e+', 'e');
   return String(Number(v.toPrecision(3)));
 }
+
+/** A session's cost so far as OpenRouter charged it, call by call, from the server's lookups. */
+export interface ApiCost { state: string; calls: number; waiting: number; cost: number; priced: number }
+export interface ApiCosts { state: 'ok' | 'no-key' | 'refused'; sessions: Record<string, ApiCost>; cost: number; complete: boolean }
+
+/** Dollars: cents from $1 on, a tenth of a cent below, since one session of a cheap model costs cents. */
+export const usd = (n: number) => `$${n >= 1 ? n.toFixed(2) : n.toFixed(3)}`;
+
+/** The cost a session's details show: what OpenRouter charged when it priced any call (at least that much while
+ * some calls are not priced yet), else the cost Claude Code reported at the end, else none. */
+export function sessionCost(node: CampaignNode, api?: ApiCost | null): { text: string; source: 'openrouter' | 'agent' | null } {
+  if (api && api.priced > 0) return { text: (api.priced < api.calls ? '≥ ' : '') + usd(api.cost), source: 'openrouter' };
+  if (node.cost != null) return { text: `$${node.cost.toFixed(2)}`, source: 'agent' };
+  return { text: '-', source: null };
+}

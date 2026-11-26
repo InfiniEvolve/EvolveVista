@@ -113,5 +113,20 @@
  "The campaign keeps running; only this page stops updating.": "campaign 会继续运行，只是这个页面停止更新。",
  "Waiting": "等待中",
  "Drag out to float": "拖出来变成浮窗",
- "Put back under the curve": "放回曲线图下面"
+ "Put back under the curve": "放回曲线图下面",
+ "{n} earlier steps are no longer kept on this page": "更早的 {n} 步已不再保留在页面上",
+ "The server would not send this session’s log.": "服务器没有发送这个会话的日志。",
+ "Live: new steps appear as the agent writes them": "实时：agent 每写一步就会出现在这里",
+ "The session has ended; this is the end of its log": "会话已结束，这是它日志的末尾",
+ "Connection lost; reconnecting…": "连接中断，正在重连…",
+ "Not connected": "未连接",
+ "Connecting…": "正在连接…",
+ "Jump to the latest": "跳到最新",
+ "submitted": "已提交",
+ "running": "运行中",
+ "Analysis": "分析",
+ "Agent log": "Agent 日志",
+ "{session} is still running. Its agent log appears here as it is written. The analysis can be started once the session ends, when its trace is complete.": "{session} 仍在运行。它的 agent 日志会在写入时实时显示在这里。会话结束、轨迹完整之后才能开始分析。",
+ "{session} has ended.": "{session} 已结束。",
+ "Analyse it": "分析它"
 }

@@ -26,7 +26,7 @@ import time
 from typing import Callable, NamedTuple
 from urllib.parse import parse_qs, urlsplit
 
-from . import campaign, vista
+from . import campaign, livelog, vista
 
 STATIC = Path(__file__).resolve().parent / "static"
 PAGE = "campaign.html"
@@ -127,6 +127,11 @@ class Handler(BaseHTTPRequestHandler):
             if not secrets.compare_digest(token, self.server.token):
                 self.respond(403, b'{"error":"Open the address the watch command printed"}'); return
             self.stream(); return
+        if url.path == "/api/campaign/agent-log":
+            query = parse_qs(url.query)
+            if not secrets.compare_digest((query.get("token") or [""])[0], self.server.token):
+                self.respond(403, b'{"error":"Open the address the watch command printed"}'); return
+            self.agent_log(query); return
         if url.path.startswith("/api/campaign/vista"):
             self.vista("GET", url); return
         if url.path == "/api/campaign":   # the snapshot once, for scripts; the page uses the stream
@@ -189,6 +194,45 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(b": keepalive\n\n"); self.wfile.flush()
                     quiet = time.monotonic()
                 self.server.closing.wait(CHECK_SECONDS)
+        except OSError:
+            pass   # the page went away
+
+    def agent_log(self, query: dict):
+        """A session's agent log as it grows: an event per batch of new entries, its id the offset reached."""
+        task, session = (query.get("task") or [""])[0], (query.get("session") or [""])[0]
+        try:
+            log = livelog.log_for(self.server.campaign, task, session)
+            livelog.redactor()   # refuse before streaming when the log could not be redacted
+        except vista.VistaError as error:
+            self.respond(error.status, json.dumps({"error": str(error)}).encode()); return
+        given = self.headers.get("Last-Event-ID") or ""
+        offset = int(given) if given.isdigit() else None
+        private = (str(self.server.campaign),)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        first, quiet = True, time.monotonic()
+        try:
+            self.wfile.write(b"retry: 3000\n\n"); self.wfile.flush()
+            while not self.server.closing.is_set():
+                batch, moved = [], False
+                if log.is_file() and log.stat().st_size != offset:
+                    try:
+                        batch, reached = livelog.read(log, offset, private)
+                    except OSError:   # e.g. replaced mid-read: try again next time
+                        reached = offset
+                    moved, offset = reached != offset, reached
+                if batch or moved or first:   # an empty batch still moves the id on, and the first says "connected"
+                    data = json.dumps({"entries": batch}, ensure_ascii=False).encode()
+                    self.wfile.write((f"id: {offset}\n" if offset is not None else "").encode() + b"event: entries\ndata: "
+                                     + data + b"\n\n"); self.wfile.flush()
+                    first, quiet = False, time.monotonic()
+                elif time.monotonic() - quiet > KEEPALIVE_SECONDS:
+                    self.wfile.write(b": keepalive\n\n"); self.wfile.flush()
+                    quiet = time.monotonic()
+                if not (moved and log.stat().st_size > offset):   # more to read at once, else wait
+                    self.server.closing.wait(CHECK_SECONDS)
         except OSError:
             pass   # the page went away
 

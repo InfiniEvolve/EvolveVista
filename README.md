@@ -54,6 +54,7 @@ address printed: it carries the token the page needs.
 | **Best-so-far curve** | Each session's value in archive order, the best reached so far, and the reference it is read against. A ratio metric spanning more than a factor of twenty is drawn on a log scale. |
 | **Session details** | Click a circle or a point: its measurements, flags, timing, cost and the report the agent wrote open under the curve. Drag them out by the title bar to float beside the page; ⤓ puts them back. |
 | **Analysis** | Drag a circle onto the analysis area for the session's TraceVista analysis. See [below](#analyse-a-session). |
+| **Agent log** | Drag a session that is still running onto the analysis area to follow its agent as it works: what it says, the tools it calls and what they return, as each step is written. See [below](#follow-a-running-session). |
 
 Colours read against the parent: **green** better, **grey** worse or unchanged, **blue** the first measured or
 still running. A **gold** ring marks the best. A hollow grey circle is a session that is not valid; a hollow
@@ -123,7 +124,20 @@ The result is kept under `<campaign>/vista/<task>/<session>/` and opens at once 
 dropped there; **Analyse again** starts anew. A session without an agent log, such as the baseline, has nothing
 to analyse.
 
-## How it works
+## Follow a running session
+
+A session that is still running has no complete trace to analyse yet. Dropped on the analysis area, it shows its
+agent log instead, as the agent writes it (`raw/agent.jsonl`): the agent's text, its thinking where the log
+keeps it, each tool call with its command or file, each result (cut to 1,500 characters) and every error, a
+subagent's steps indented. The view follows the newest step unless you scroll up; **Jump to the latest** follows
+it again. The page keeps the last 2,000 steps; a new view of a long log starts from its last 400.
+
+The log is redacted with the TraceVista skill's own patterns, those its timeline extraction uses, and the values
+of the server's own credentials (environment variables named like a token, key, secret or password) never
+appear. Analysing waits for the session to end; when it does, the log stays in view with **Analyse it**. A
+finished session can show its log too: **Analysis** and **Agent log** above the area switch between them.
+
+
 
 **Reading a campaign.** The page reads a campaign with InfiniEvolve's own snapshot (`infinievolve.snapshot`),
 so it shows the campaign exactly as the loop wrote it. A campaign in the older infra-evolve layout, which
@@ -134,6 +148,8 @@ own reader (`evolve_vista/campaign.py`).
 only when the campaign changed: a session submitted, archived, re-measured or flagged. To notice, it compares
 the modification times of the files it reads once a second. **Freeze view** closes the connection so the page
 holds still while you read; the campaign keeps running. It is hidden once every task has stopped.
+A running session's agent log comes the same way, on a second connection while it is open: the server reads the
+log from where it last stopped, once a second, and sends only whole new lines.
 
 **Confined.** The server binds to 127.0.0.1 only, reads the campaign directory and writes only the analyses
 under `vista/`, and answers only the page that carries the token in the printed address. It starts an agent

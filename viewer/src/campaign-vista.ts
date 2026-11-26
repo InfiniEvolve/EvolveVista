@@ -36,6 +36,11 @@ export interface VistaTimeline { task: string; session: string; events: number; 
 export interface BuildResult { ok: boolean; error?: string }
 /** One thing a session's agent said or did, as the server's live log sends it: shortened and redacted. */
 export interface LogEntry { kind: 'text' | 'thinking' | 'tool' | 'result' | 'error' | 'system' | 'done'; text: string; tool?: string; sub?: boolean }
+/** One call of the agent to its model, as OpenRouter measured it: ttft and gen in ms, tps over the generation time. */
+export interface ApiPoint { id: string; time: string | null; ttft: number | null; gen: number | null; tokens: number | null; tps: number | null;
+  provider: string | null; finish: string | null; sub: boolean }
+/** What the server knows of a session's model calls; points are only those new to this connection. */
+export interface ApiStats { state: 'ok' | 'no-key' | 'not-openrouter' | 'refused'; calls: number; waiting: number; missing: number; points: ApiPoint[] }
 /** A session's agent log as it grows: batches of entries (server-sent events; the token rides in the address). */
 export const agentLogUrl = (token: string, task: string, session: string) =>
   `/api/campaign/agent-log?${new URLSearchParams({ token, task, session })}`;
@@ -54,6 +59,8 @@ export function vistaApi(token: string) {
   return {
     /** Follow a session's agent log; close the EventSource to stop. */
     agentLog: (task: string, session: string) => new EventSource(agentLogUrl(token, task, session)),
+    /** Follow how fast the session's model answered each call (looked up by the server at OpenRouter). */
+    apiStats: (task: string, session: string) => new EventSource(`/api/campaign/agent-api-stats?${new URLSearchParams({ token, task, session })}`),
     status: (task: string, session: string) => call<VistaStatus>('', task, session),
     /** The agents this server can start; none from a server that runs no agents. */
     analysts: () => call<{ analysts: Analyst[] }>('/analysts', '', '').then(r => r.analysts),

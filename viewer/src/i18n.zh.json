@@ -128,5 +128,21 @@
  "Agent log": "Agent 日志",
  "{session} is still running. Its agent log appears here as it is written. The analysis can be started once the session ends, when its trace is complete.": "{session} 仍在运行。它的 agent 日志会在写入时实时显示在这里。会话结束、轨迹完整之后才能开始分析。",
  "{session} has ended.": "{session} 已结束。",
- "Analyse it": "分析它"
+ "Analyse it": "分析它",
+ "No calls measured yet": "还没有测到调用",
+ "subagent": "子 agent",
+ "TTFT": "首 token 延迟",
+ "TPS": "每秒 token",
+ "{n} tokens in {time}": "{time} 内 {n} 个 token",
+ "Time to first token": "首 token 延迟（TTFT）",
+ "Tokens per second": "每秒 token 数（TPS）",
+ "median {value} over the last {n} calls": "最近 {n} 次调用的中位数 {value}",
+ "{value} tok/s over the last {n} calls, weighted by tokens": "最近 {n} 次调用按 token 加权 {value} tok/s",
+ "Looking up the model’s answer times…": "正在查询模型的响应时间…",
+ "No API stats for this session: the server has no OPENROUTER_API_KEY.": "这个会话没有 API 统计：服务器没有 OPENROUTER_API_KEY。",
+ "No API stats for this session: its agent does not reach its model through OpenRouter.": "这个会话没有 API 统计：它的 agent 不是通过 OpenRouter 调用模型的。",
+ "No API stats for this session: OpenRouter refused the server’s key.": "这个会话没有 API 统计：OpenRouter 拒绝了服务器的 key。",
+ "Model answer times": "模型响应时间",
+ "{calls} model calls; each dot is one, larger for more tokens. Measured by OpenRouter.": "共 {calls} 次模型调用；每个点是一次，token 越多点越大。数据来自 OpenRouter。",
+ "{n} waiting for their numbers.": "{n} 次还在等数据。"
 }

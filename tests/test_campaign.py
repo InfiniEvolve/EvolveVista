@@ -227,6 +227,12 @@ class VistaTest(ServerTest):
         self.assertEqual((status, graph["format"]), (200, "coding-agent-state-trajectory"))
         self.assertTrue((self.campaign / "vista" / "golf" / "s001" / "graph.json").is_file())
 
+    def test_a_session_of_an_older_local_run_keeps_its_log_as_agent_log(self):
+        write(self.campaign / "tasks" / "golf" / "sessions" / "s002" / "raw" / "agent.log", LOG)
+        self.assertEqual(self.vista(session="s002")[1]["log"], True)
+        status, timeline = self.vista("/timeline", session="s002")
+        self.assertEqual((status, timeline["events"]), (200, 3))
+
     def test_what_the_analysis_endpoints_refuse(self):
         self.assertEqual(self.get("/api/campaign/vista?task=golf&session=s001")[0], 403, "no token")
         self.assertEqual(self.get("/api/campaign/vista?task=..&session=s001", **{HEADER: "t0ken"})[0], 400)

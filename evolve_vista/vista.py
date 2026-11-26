@@ -28,7 +28,9 @@ import time
 from pathlib import Path
 
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
-LOGS = ("raw/agent.jsonl",)   # where a session keeps its agent's log
+# where a session keeps its agent's log: agent.jsonl, or agent.log in runs made by InfiniEvolve's local
+# adapter before it adopted that name
+LOGS = ("raw/agent.jsonl", "raw/agent.log")
 HERE = Path(__file__).resolve().parent
 
 

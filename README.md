@@ -65,7 +65,8 @@ Everything except the analysis is read from the campaign's archive. No model is 
 
 Drag a circle of the lineage onto the analysis area beside it. The page shows that session's TraceVista
 analysis, the same state map the TraceVista skill makes, inside the TraceVista viewer. First the server extracts
-the session's agent log (`raw/agent.jsonl`) with the skill's `extract_timeline.py`: redacted, images omitted.
+the session's agent log (`raw/agent.jsonl`, or `raw/agent.log` in runs made by InfiniEvolve's local adapter
+before it adopted that name) with the skill's `extract_timeline.py`: redacted, images omitted.
 Then **Written by** picks who writes the analysis.
 
 **An agent on the serving machine** (the default when one is available). It starts in

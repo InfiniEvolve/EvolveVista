@@ -485,6 +485,37 @@ PRESETS = {
 }
 
 
+# How an agent marks the commands it runs, where its source or documentation says so: Claude Code sets CLAUDECODE,
+# Codex CODEX_THREAD_ID (and CODEX_SANDBOX inside its sandbox), Gemini CLI GEMINI_CLI. Any agent in PRESETS is also
+# known by its program's name among the processes that started this one.
+LAUNCH_MARKS = {"claude": ("CLAUDECODE",), "codex": ("CODEX_THREAD_ID", "CODEX_SANDBOX"), "gemini": ("GEMINI_CLI",)}
+
+
+def ancestor_names(limit: int = 40) -> list:
+    """The program names of the processes that started this one, nearest first; none where `ps` is missing."""
+    names, pid = [], os.getppid()
+    while pid > 1 and len(names) < limit:
+        try:
+            row = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True,
+                                 timeout=5, stdin=subprocess.DEVNULL).stdout.strip().split(None, 1)
+            pid = int(row[0])
+        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+            break
+        names.append(Path(row[1]).name if len(row) > 1 else "")
+    return names
+
+
+def launching_agent(environ=None, ancestors=None):
+    """The agent in PRESETS this server was started from: the nearest of its processes named for one, else one
+    whose mark is in the environment (it survives tmux and nohup, which hide the processes); None if neither."""
+    programs = {binary: program for program, (binary, *_) in PRESETS.items()}
+    for name in ancestor_names() if ancestors is None else ancestors:
+        if name in programs:
+            return programs[name]
+    environ = os.environ if environ is None else environ
+    return next((program for program, marks in LAUNCH_MARKS.items() if any(environ.get(m) for m in marks)), None)
+
+
 # What the page offers beside each agent: models to pick from (any other may be typed) and effort levels.
 # Claude Code cannot list its models, so these are the current ones; Codex lists its own (codex_models).
 CHOICES = {
@@ -700,19 +731,24 @@ def activity(work: Path, *private: Path, lines: int = 80) -> list:
 class Analysts:
     """The agents this server may start for an analysis, and the jobs they run."""
 
-    def __init__(self, specs=(), detect: bool = True):
+    def __init__(self, specs=(), detect: bool = True, launcher=None):
+        """Offered in this order, the page picking the first unless the reader picked before: each --analyst
+        setting, then the installed agent that started this server (`launcher`, found when not given), then
+        the other installed agents."""
         self.choices = {}
-        if detect:
-            for program, (binary, label, _, _, _, tested) in PRESETS.items():
-                if shutil.which(binary):
-                    self.choices[program] = {"id": program, "label": label, "detail": binary,
-                                             "untested": not tested, "spec": program, **self.options(program)}
         for spec in specs:
             launch = agent_launch(spec)   # a bad setting fails at start, not on the page
             key = launch["label"] if launch["shell"] else spec
             self.choices[key] = {"id": key, "label": launch["label"], "untested": launch["tested"] is False,
                                  "detail": launch["command"] if launch["shell"] else " ".join(launch["command"][:4]), "spec": spec,
                                  **({} if launch["shell"] else self.options(spec))}
+        if detect:
+            first = launcher if launcher is not None else launching_agent()
+            for program in sorted(PRESETS, key=lambda p: p != first):
+                binary, label, _, _, _, tested = PRESETS[program]
+                if program not in self.choices and shutil.which(binary):
+                    self.choices[program] = {"id": program, "label": label, "detail": binary,
+                                             "untested": not tested, "spec": program, **self.options(program)}
         self.running = {}
 
     @staticmethod

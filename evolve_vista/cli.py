@@ -10,7 +10,8 @@ from .vista import Analysts
 
 ANALYST_HELP = ("an agent the reader may pick to analyse a session: <agent>[/<model>[:<effort>]] (claude, codex, "
                 "gemini, qwen, opencode, cursor, copilot, amp, goose, droid) or <name>=<shell command>; repeatable. "
-                "Installed agents are offered without it")
+                "Installed agents are offered without it; the page picks the first --analyst, else the agent this "
+                "was started from")
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:

@@ -83,6 +83,9 @@ same checks. The page shows what the agent is doing, can stop it, and finds it a
 Each of these is offered when it is installed: Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor CLI,
 GitHub Copilot CLI, Amp, Goose and Factory Droid. Each is started unattended as its documentation describes;
 only Claude Code and Codex have been run this way here, and the page marks the others untested.
+The page picks the agent you started it from (run `infinievolve watch` inside Codex and Codex is picked),
+or the first `--analyst`, until you pick another; it remembers that pick. Started over ssh or by a
+service, it cannot tell, and picks the first installed agent.
 
 `--analyst` adds a particular model, or any other agent:
 

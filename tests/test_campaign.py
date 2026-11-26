@@ -1,5 +1,6 @@
 """The campaign snapshot and its server, on synthetic campaigns in both layouts."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -320,7 +321,6 @@ class AgentTest(VistaTest):
 
     def test_installed_agents_are_found_and_started_as_their_documentation_says(self):
         """A `gemini` on the PATH is offered, marked untested, and given the prompt's file instead of stdin."""
-        import os
         bin_dir = Path(self.temp.name) / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "gemini"
@@ -383,5 +383,26 @@ class AgentTest(VistaTest):
         for bad in (("claude/sonnet", "", "turbo"), ("claude/sonnet", "x; rm", ""), ("amp", "gpt", ""), ("own", "m", "")):
             with self.assertRaises(self.vista_module.VistaError):
                 analysts.spec_for(*bad)
+
+    def test_the_agent_that_started_the_server_is_offered_first(self):
+        vista = self.vista_module
+        self.assertEqual(vista.launching_agent({}, ["zsh", "codex", "claude", "login"]), "codex", "the nearest")
+        self.assertEqual(vista.launching_agent({"GEMINI_CLI": "1"}, ["zsh", "tmux"]), "gemini")
+        self.assertEqual(vista.launching_agent({"CLAUDECODE": "1"}, ["cursor-agent"]), "cursor", "processes first")
+        self.assertIsNone(vista.launching_agent({"TERM": "x"}, ["zsh", "sshd"]))
+        self.assertIsInstance(vista.ancestor_names(), list)
+        with tempfile.TemporaryDirectory() as bin_dir:
+            for name in ("claude", "codex", "gemini"):
+                Path(bin_dir, name).write_text("#!/bin/sh\n")
+                Path(bin_dir, name).chmod(0o755)
+            saved = os.environ["PATH"]
+            os.environ["PATH"] = bin_dir
+            try:
+                order = lambda *a, **k: [c["id"] for c in vista.Analysts(*a, **k).listing()]
+                self.assertEqual(order(launcher="codex"), ["codex", "claude", "gemini"])
+                self.assertEqual(order(launcher=""), ["claude", "codex", "gemini"], "none found: as listed")
+                self.assertEqual(order(["claude/opus", "codex"], launcher="gemini"), ["claude/opus", "codex", "gemini", "claude"])
+            finally:
+                os.environ["PATH"] = saved
 
     test_a_session_is_extracted_compiled_and_kept = test_what_the_analysis_endpoints_refuse = None

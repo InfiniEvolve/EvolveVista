@@ -6,7 +6,8 @@ const MAX_POINTS = 5000;   // two hours at a call every second or two
 const WINDOW = 15;         // calls in the rolling line
 const PAD = { left: 44, right: 12, top: 8, bottom: 20 };
 
-type Shown = Omit<ApiStats, 'points'> | null;
+// 'absent': the stream itself was refused, by a server older than this page
+type Shown = (Omit<ApiStats, 'points' | 'state'> & { state: ApiStats['state'] | 'absent' }) | null;
 
 /** One measure of the agent's model calls over time: a dot per call (bigger for more tokens) and a rolling line. */
 interface Measure { key: 'ttft' | 'tps'; title: string; value: (p: ApiPoint) => number | null; format: (v: number) => string;
@@ -110,7 +111,7 @@ export default function ApiCharts({ api, task, session }: { api: VistaApi; task:
         return all.slice(-MAX_POINTS);
       });
     });
-    source.onerror = () => { if (source.readyState === EventSource.CLOSED) setInfo(i => i ?? { state: 'refused', calls: 0, waiting: 0, missing: 0 }); };
+    source.onerror = () => { if (source.readyState === EventSource.CLOSED) setInfo(i => i ?? { state: 'absent', calls: 0, waiting: 0, missing: 0 }); };
     return () => source.close();
   }, [api, task, session]);
   const measures = useMemo<Measure[]>(() => [
@@ -124,7 +125,8 @@ export default function ApiCharts({ api, task, session }: { api: VistaApi; task:
   if (info.state !== 'ok') return <p className="api-note">{
     info.state === 'no-key' ? t('No API stats for this session: the server has no OPENROUTER_API_KEY.')
     : info.state === 'not-openrouter' ? t('No API stats for this session: its agent does not reach its model through OpenRouter.')
-    : t('No API stats for this session: OpenRouter refused the server’s key.')}</p>;
+    : info.state === 'refused' ? t('No API stats for this session: OpenRouter refused the server’s key.')
+    : t('This server does not look up API stats. Restart it with the current version to see them.')}</p>;
   return <section className="api-charts" aria-label={t('Model answer times')}>
     {measures.map(m => <MetricChart key={m.key} points={points} measure={m} />)}
     <p className="api-foot">{t('{calls} model calls; each dot is one, larger for more tokens. Measured by OpenRouter.', { calls: info.calls.toLocaleString() })}

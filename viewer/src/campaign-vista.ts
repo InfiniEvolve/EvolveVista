@@ -34,6 +34,11 @@ export interface AgentJob { analyst: string; label: string; state: 'running' | '
   error: string | null; note: string | null; elapsed: number; activity: string[] }
 export interface VistaTimeline { task: string; session: string; events: number; first: string | null; last: string | null; parts: string[]; characters: number }
 export interface BuildResult { ok: boolean; error?: string }
+/** One thing a session's agent said or did, as the server's live log sends it: shortened and redacted. */
+export interface LogEntry { kind: 'text' | 'thinking' | 'tool' | 'result' | 'error' | 'system' | 'done'; text: string; tool?: string; sub?: boolean }
+/** A session's agent log as it grows: batches of entries (server-sent events; the token rides in the address). */
+export const agentLogUrl = (token: string, task: string, session: string) =>
+  `/api/campaign/agent-log?${new URLSearchParams({ token, task, session })}`;
 
 /** The campaign server's analysis endpoints, with the page's token. */
 export function vistaApi(token: string) {
@@ -47,6 +52,8 @@ export function vistaApi(token: string) {
     return body as T;
   };
   return {
+    /** Follow a session's agent log; close the EventSource to stop. */
+    agentLog: (task: string, session: string) => new EventSource(agentLogUrl(token, task, session)),
     status: (task: string, session: string) => call<VistaStatus>('', task, session),
     /** The agents this server can start; none from a server that runs no agents. */
     analysts: () => call<{ analysts: Analyst[] }>('/analysts', '', '').then(r => r.analysts),

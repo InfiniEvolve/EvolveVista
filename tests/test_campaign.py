@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 
@@ -247,10 +248,6 @@ class VistaTest(ServerTest):
     test_the_page_and_the_snapshot = test_the_stream_pushes_a_snapshot_now_and_on_change_only = test_what_is_refused = None
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # A stand-in agent: reads its prompt on standard input, writes the analysis given in its environment and
 # runs check.py as the prompt asks, or (SLEEP) waits to be stopped.
 FAKE_AGENT = r'''
@@ -385,3 +382,126 @@ class AgentTest(VistaTest):
                 analysts.spec_for(*bad)
 
     test_a_session_is_extracted_compiled_and_kept = test_what_the_analysis_endpoints_refuse = None
+
+
+# A running session's agent log, Claude Code stream-json, as the live view reads it.
+LIVE = [
+    {"type": "system", "subtype": "init", "model": "claude-x", "cwd": "/work"},
+    {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 12},
+    {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "Try a shorter loop."}]}},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Measuring first."},
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "python3 bench.py", "description": "Time it"}}]}},
+    {"type": "tool_progress", "tool_name": "Bash", "elapsed_time_seconds": 3},
+    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+        "content": "Traceback: ANTHROPIC_API_KEY=sk-ant-abcdefghijklmnopqrstuvwx" + "x" * 5000}]}},
+    {"type": "assistant", "parent_tool_use_id": "t2", "message": {"content": [
+        {"type": "tool_use", "id": "t3", "name": "Read", "input": {"file_path": "solution.py"}}]}},
+]
+
+
+class LiveLogTest(ServerTest):
+    """A session still running: its agent log, redacted and shortened, streamed as it grows."""
+
+    def setUp(self):
+        super().setUp()
+        self.log = self.campaign / "tasks" / "golf" / "sessions" / "s004" / "raw" / "agent.jsonl"
+
+    def append(self, *events, partial=""):
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.log, "a") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in events) + partial)
+
+    def open(self, session="s004", last=None):
+        import http.client
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+        connection.request("GET", f"/api/campaign/agent-log?token=t0ken&task=golf&session={session}",
+                           headers={"Last-Event-ID": last} if last else {})
+        response = connection.getresponse()
+        self.addCleanup(connection.close)
+        return response
+
+    @staticmethod
+    def batch(response):
+        """(id, entries) of the next batch."""
+        lines = []
+        while True:
+            line = response.fp.readline().decode().rstrip("\n")
+            if line == "" and any(l.startswith("data: ") for l in lines):
+                given = next((l[4:] for l in lines if l.startswith("id: ")), None)
+                return given, json.loads(next(l for l in lines if l.startswith("data: "))[6:])["entries"]
+            if line and not line.startswith(":"):
+                lines.append(line)
+
+    def test_what_the_agent_does_is_read_shortened_and_redacted(self):
+        from evolve_vista import livelog
+        self.append(*LIVE)
+        found, offset = livelog.read(self.log, None, (str(self.campaign),))
+        self.assertEqual(offset, self.log.stat().st_size)
+        self.assertEqual([e["kind"] for e in found], ["system", "thinking", "text", "tool", "error", "tool"],
+                         "token counts and progress heartbeats are left out")
+        self.assertEqual(found[0]["text"], "Session started · claude-x · /work")
+        self.assertEqual((found[3]["tool"], found[3]["text"]), ("Bash", "python3 bench.py   # Time it"))
+        self.assertNotIn("sk-ant-abcdefghijklmnopqrstuvwx", found[4]["text"], "redacted as the timeline is")
+        self.assertIn("[REDACTED", found[4]["text"])
+        self.assertLess(len(found[4]["text"]), 1600, "a long result is cut")
+        self.assertIn("more characters]", found[4]["text"])
+        self.assertTrue(found[5].get("sub"), "a subagent's step is marked")
+        self.assertNotIn("sub", found[3])
+        with unittest.mock.patch.dict("os.environ", {"MY_SERVICE_TOKEN": "s3cr3t-value-of-this-server"}):
+            self.append({"type": "assistant", "message": {"content": [{"type": "text", "text": "env: s3cr3t-value-of-this-server"}]}})
+            found, _ = livelog.read(self.log, offset, ())
+        self.assertEqual(found[0]["text"], "env: [REDACTED CREDENTIAL]", "the server's own credentials never appear")
+
+    def test_a_long_log_opens_near_its_end_and_a_long_line_is_skipped(self):
+        from evolve_vista import livelog
+        self.append(*[{"type": "assistant", "message": {"content": [{"type": "text", "text": f"step {i}"}]}} for i in range(50)])
+        with unittest.mock.patch.object(livelog, "TAIL_ENTRIES", 5):
+            found, _ = livelog.read(self.log, None)
+        self.assertEqual([e["text"] for e in found], [f"step {i}" for i in range(45, 50)])
+        with unittest.mock.patch.object(livelog, "TAIL_BYTES", 200):
+            found, _ = livelog.read(self.log, None)
+        self.assertTrue(found and found[-1]["text"] == "step 49" and all(e["text"].startswith("step ") for e in found),
+                        "a cut first line is dropped, not shown as garbage")
+        offset = self.log.stat().st_size
+        with unittest.mock.patch.object(livelog, "CHUNK_BYTES", 128):
+            self.append({"type": "assistant", "message": {"content": [{"type": "text", "text": "x" * 500}]}},
+                        {"type": "assistant", "message": {"content": [{"type": "text", "text": "after"}]}})
+            found, offset = livelog.read(self.log, offset)
+            self.assertEqual(found[0]["kind"], "system")
+            self.assertIn("is not shown", found[0]["text"])
+            found, offset = livelog.read(self.log, offset)
+        self.assertEqual([e["text"] for e in found], ["after"])
+
+    def test_the_stream_sends_new_entries_only_and_carries_on_after_a_reconnect(self):
+        response = self.open()
+        self.assertEqual((response.status, response.getheader("Content-Type")), (200, "text/event-stream"))
+        self.assertEqual(self.batch(response), (None, []), "connected; the agent has not started yet")
+        self.append(*LIVE[:4], partial='{"type": "assistant", "mess')
+        first, found = self.batch(response)
+        self.assertEqual([e["kind"] for e in found], ["system", "thinking", "text", "tool"], "the line being written waits")
+        with open(self.log, "a") as f:
+            f.write('age": {"content": [{"type": "text", "text": "Done measuring."}]}}\n')
+        second, found = self.batch(response)
+        self.assertEqual(found, [{"kind": "text", "text": "Done measuring."}])
+        self.assertEqual(int(second), self.log.stat().st_size)
+        response.close()
+        self.append({"type": "result", "subtype": "success", "num_turns": 3, "total_cost_usd": 0.25, "result": "Shorter."})
+        again = self.open(last=second)
+        _, found = self.batch(again)
+        self.assertEqual(found, [{"kind": "done", "text": "Finished · 3 turns · $0.25\nShorter."}], "nothing sent twice")
+
+    def test_what_the_live_log_refuses(self):
+        self.assertEqual(self.get("/api/campaign/agent-log?task=golf&session=s004")[0], 403, "no token")
+        self.assertEqual(self.get("/api/campaign/agent-log?token=wrong&task=golf&session=s004")[0], 403)
+        self.assertEqual(self.get("/api/campaign/agent-log?task=golf&session=s004", **{HEADER: "t0ken"})[0], 403,
+                         "an EventSource carries its token in the address")
+        self.assertEqual(self.get("/api/campaign/agent-log?token=t0ken&task=golf&session=s999")[0], 404)
+        self.assertEqual(self.get("/api/campaign/agent-log?token=t0ken&task=..&session=s004")[0], 400)
+        self.assertEqual(self.get("/api/campaign/agent-log?token=t0ken&task=golf&session=s004",
+                                  Origin="http://evil.example")[0], 403)
+
+    test_the_page_and_the_snapshot = test_the_stream_pushes_a_snapshot_now_and_on_change_only = test_what_is_refused = None
+
+
+if __name__ == "__main__":
+    unittest.main()

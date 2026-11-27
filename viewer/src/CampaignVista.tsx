@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CampaignNode, CampaignTask } from './campaign';
 import { campaignFacts, generate, LOOSE_AFTER, OUTPUT_TOKENS, SYSTEM, userMessage, type AgentJob, type Analyst, type LogEntry, type Progress, type VistaApi, type VistaStatus, type VistaTimeline } from './campaign-vista';
 import { useLang } from './i18n';
+import ApiCharts from './ApiCharts';
 import { parseGraph } from '@tracevista/model';
 import ProviderPicker from '@tracevista/ProviderPicker';
 import { canListModels, changeEndpoint, listModels, presetOf, requestReady, restoreSettings, safeError, selectedPreset, switchPreset, type ChatSettings, type ModelInfo } from '@tracevista/providers';
@@ -288,6 +289,7 @@ export default function SessionVista({ task, node, api, over, dragging }: { task
         {sessionLive ? <p className="vista-meta">{t('{session} is still running. Its agent log appears here as it is written. The analysis can be started once the session ends, when its trace is complete.', { session: node.id })}</p>
           : ended ? <div className="vista-ended"><span>{t('{session} has ended.', { session: node.id })}</span>
             <button className="vista-go" onClick={() => { setEnded(false); setView('analysis'); }}>{t('Analyse it')}</button></div> : null}
+        <ApiCharts api={api} task={task.name} session={node.id} />
         <LiveLog api={api} task={task.name} session={node.id} running={sessionLive} /></div>
       : stage.kind === 'loading' ? <div className="task-vista-empty">{t('Reading the session…')}</div>
       : stage.kind === 'nolog' ? <div className="task-vista-empty">{t('This session has no agent log, so there is no trace to analyse. The baseline runs no agent.')}</div>

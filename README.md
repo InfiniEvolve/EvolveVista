@@ -137,7 +137,30 @@ of the server's own credentials (environment variables named like a token, key, 
 appear. Analysing waits for the session to end; when it does, the log stays in view with **Analyse it**. A
 finished session can show its log too: **Analysis** and **Agent log** above the area switch between them.
 
+### How fast the agent's model answers
 
+When the agent reaches its model through OpenRouter, the upper half of the area charts each of its calls to the
+model over time, with the log below. One chart shows the **time to first token**, with a rolling median over the
+last 15 calls. The other shows **tokens per second**: tokens over OpenRouter's generation time, with a rolling
+token-weighted rate over the last 15 calls. Each call is a dot, larger for more tokens, because short replies
+are dominated by overhead. Hovering a dot shows its time, TTFT, TPS, tokens, provider and finish reason.
+
+The server finds the calls by the `request_id` each assistant line of the log carries (OpenRouter's `gen-...`
+generation id) and asks OpenRouter's generation endpoint about each, with the `OPENROUTER_API_KEY` it was
+started with. The key never reaches the page. OpenRouter has a call's numbers a few seconds after it ends, so
+the server tries again with backoff. It runs at most four lookups at once and pauses when told to slow down.
+It keeps what it found in `<campaign>/vista/<task>/<session>/api-stats.json`, so a restart does not ask again.
+Without the key, or for an agent whose ids are not OpenRouter's, the area says so in a line and the log takes
+the whole area. A finished session's charts work the same way, without new points.
+
+**What a session cost.** OpenRouter also says what it charged for each call. The server adds these up for
+every session of the campaign that ran an agent, not only the one in view. A session's details then show
+**Cost (OpenRouter)** instead of the cost Claude Code reports at the end. Claude Code prices an OpenRouter
+model with its own price table, and it reports nothing for a session that has not ended. The page header shows
+the campaign's total. While some calls are not priced yet, both read "≥". Without OpenRouter numbers, the
+details keep Claude Code's cost.
+
+## How it works
 
 **Reading a campaign.** The page reads a campaign with InfiniEvolve's own snapshot (`infinievolve.snapshot`),
 so it shows the campaign exactly as the loop wrote it. A campaign in the older infra-evolve layout, which
@@ -152,8 +175,9 @@ A running session's agent log comes the same way, on a second connection while i
 log from where it last stopped, once a second, and sends only whole new lines.
 
 **Confined.** The server binds to 127.0.0.1 only, reads the campaign directory and writes only the analyses
-under `vista/`, and answers only the page that carries the token in the printed address. It starts an agent
-only when you ask for one. It needs Python 3.10 or newer and no packages.
+and the model-call numbers under `vista/`, and answers only the page that carries the token in the printed
+address. It starts an agent only when you ask for one. It contacts nothing but OpenRouter, and only when it was
+started with `OPENROUTER_API_KEY` and a watched session's agent uses OpenRouter. It needs Python 3.10 or newer and no packages.
 
 ## TraceVista
 

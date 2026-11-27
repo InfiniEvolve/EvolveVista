@@ -1,10 +1,12 @@
 """The campaign snapshot and its server, on synthetic campaigns in both layouts."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 
@@ -219,22 +221,6 @@ class VistaTest(ServerTest):
         status, _, body = self.get(f"/api/campaign/vista{route}?task=golf&session={session}", **{HEADER: "t0ken"})
         return status, json.loads(body)
 
-    def test_a_sessions_log_is_read_from_its_end_and_followed(self):
-        status, part = self.vista("/log")
-        self.assertEqual(status, 200)
-        self.assertEqual([(e["k"], e["t"]) for e in part["entries"]], [("meta", "Started · m"), ("say", "I shortened the loop."), ("end", "Finished")])
-        log = self.campaign / "tasks" / "golf" / "sessions" / "s001" / "raw" / "agent.jsonl"
-        with open(log, "a") as f:   # a tool call, its result, and half a line still being written
-            f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}}) + "\n")
-            f.write(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "a.py", "is_error": True}]}}) + "\n")
-            f.write('{"type": "assis')
-        status, _, body = self.get(f"/api/campaign/vista/log?task=golf&session=s001&from={part['offset']}", **{HEADER: "t0ken"})
-        later = json.loads(body)
-        self.assertEqual(later["entries"], [{"k": "tool", "t": "Bash: ls"}, {"k": "out", "t": "a.py", "err": True}])
-        self.assertEqual(later["offset"], log.stat().st_size - len('{"type": "assis'), "the half line is read next time")
-        self.assertEqual(self.vista("/log", session="s002")[1]["exists"], False)
-        self.assertEqual(self.vista("/log", session="nope")[0], 404)
-
     def test_a_session_is_extracted_compiled_and_kept(self):
         self.assertEqual(self.vista()[1]["log"], True)
         self.assertEqual(self.vista()[1]["ready"], False)
@@ -260,6 +246,12 @@ class VistaTest(ServerTest):
         self.assertEqual((status, graph["format"]), (200, "coding-agent-state-trajectory"))
         self.assertTrue((self.campaign / "vista" / "golf" / "s001" / "graph.json").is_file())
 
+    def test_a_session_of_an_older_local_run_keeps_its_log_as_agent_log(self):
+        write(self.campaign / "tasks" / "golf" / "sessions" / "s002" / "raw" / "agent.log", LOG)
+        self.assertEqual(self.vista(session="s002")[1]["log"], True)
+        status, timeline = self.vista("/timeline", session="s002")
+        self.assertEqual((status, timeline["events"]), (200, 3))
+
     def test_what_the_analysis_endpoints_refuse(self):
         self.assertEqual(self.get("/api/campaign/vista?task=golf&session=s001")[0], 403, "no token")
         self.assertEqual(self.get("/api/campaign/vista?task=..&session=s001", **{HEADER: "t0ken"})[0], 400)
@@ -272,10 +264,6 @@ class VistaTest(ServerTest):
 
     # the page and snapshot tests are inherited unchanged; skip their second run
     test_the_page_and_the_snapshot = test_the_stream_pushes_a_snapshot_now_and_on_change_only = test_what_is_refused = None
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 # A stand-in agent: reads its prompt on standard input, writes the analysis given in its environment and
@@ -347,7 +335,6 @@ class AgentTest(VistaTest):
 
     def test_installed_agents_are_found_and_started_as_their_documentation_says(self):
         """A `gemini` on the PATH is offered, marked untested, and given the prompt's file instead of stdin."""
-        import os
         bin_dir = Path(self.temp.name) / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "gemini"
@@ -411,4 +398,363 @@ class AgentTest(VistaTest):
             with self.assertRaises(self.vista_module.VistaError):
                 analysts.spec_for(*bad)
 
+    def test_the_agent_that_started_the_server_is_offered_first(self):
+        vista = self.vista_module
+        self.assertEqual(vista.launching_agent({}, ["zsh", "codex", "claude", "login"]), "codex", "the nearest")
+        self.assertEqual(vista.launching_agent({"GEMINI_CLI": "1"}, ["zsh", "tmux"]), "gemini")
+        self.assertEqual(vista.launching_agent({"CLAUDECODE": "1"}, ["cursor-agent"]), "cursor", "processes first")
+        self.assertIsNone(vista.launching_agent({"TERM": "x"}, ["zsh", "sshd"]))
+        self.assertIsInstance(vista.ancestor_names(), list)
+        with tempfile.TemporaryDirectory() as bin_dir:
+            for name in ("claude", "codex", "gemini"):
+                Path(bin_dir, name).write_text("#!/bin/sh\n")
+                Path(bin_dir, name).chmod(0o755)
+            saved = os.environ["PATH"]
+            os.environ["PATH"] = bin_dir
+            try:
+                order = lambda *a, **k: [c["id"] for c in vista.Analysts(*a, **k).listing()]
+                self.assertEqual(order(launcher="codex"), ["codex", "claude", "gemini"])
+                self.assertEqual(order(launcher=""), ["claude", "codex", "gemini"], "none found: as listed")
+                self.assertEqual(order(["claude/opus", "codex"], launcher="gemini"), ["claude/opus", "codex", "gemini", "claude"])
+            finally:
+                os.environ["PATH"] = saved
+
     test_a_session_is_extracted_compiled_and_kept = test_what_the_analysis_endpoints_refuse = None
+
+
+# A running session's agent log, Claude Code stream-json, as the live view reads it.
+LIVE = [
+    {"type": "system", "subtype": "init", "model": "claude-x", "cwd": "/work"},
+    {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 12},
+    {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "Try a shorter loop."}]}},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Measuring first."},
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "python3 bench.py", "description": "Time it"}}]}},
+    {"type": "tool_progress", "tool_name": "Bash", "elapsed_time_seconds": 3},
+    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+        "content": "Traceback: ANTHROPIC_API_KEY=sk-ant-abcdefghijklmnopqrstuvwx" + "x" * 5000}]}},
+    {"type": "assistant", "parent_tool_use_id": "t2", "message": {"content": [
+        {"type": "tool_use", "id": "t3", "name": "Read", "input": {"file_path": "solution.py"}}]}},
+]
+
+
+class LiveLogTest(ServerTest):
+    """A session still running: its agent log, redacted and shortened, streamed as it grows."""
+
+    def setUp(self):
+        super().setUp()
+        self.log = self.campaign / "tasks" / "golf" / "sessions" / "s004" / "raw" / "agent.jsonl"
+
+    def append(self, *events, partial=""):
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.log, "a") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in events) + partial)
+
+    def open(self, session="s004", last=None):
+        import http.client
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+        connection.request("GET", f"/api/campaign/agent-log?token=t0ken&task=golf&session={session}",
+                           headers={"Last-Event-ID": last} if last else {})
+        response = connection.getresponse()
+        self.addCleanup(connection.close)
+        return response
+
+    @staticmethod
+    def batch(response):
+        """(id, entries) of the next batch."""
+        lines = []
+        while True:
+            line = response.fp.readline().decode().rstrip("\n")
+            if line == "" and any(l.startswith("data: ") for l in lines):
+                given = next((l[4:] for l in lines if l.startswith("id: ")), None)
+                return given, json.loads(next(l for l in lines if l.startswith("data: "))[6:])["entries"]
+            if line and not line.startswith(":"):
+                lines.append(line)
+
+    def test_what_the_agent_does_is_read_shortened_and_redacted(self):
+        from evolve_vista import livelog
+        self.append(*LIVE)
+        found, offset = livelog.read(self.log, None, (str(self.campaign),))
+        self.assertEqual(offset, self.log.stat().st_size)
+        self.assertEqual([e["kind"] for e in found], ["system", "thinking", "text", "tool", "error", "tool"],
+                         "token counts and progress heartbeats are left out")
+        self.assertEqual(found[0]["text"], "Session started · claude-x · /work")
+        self.assertEqual((found[3]["tool"], found[3]["text"]), ("Bash", "python3 bench.py   # Time it"))
+        self.assertNotIn("sk-ant-abcdefghijklmnopqrstuvwx", found[4]["text"], "redacted as the timeline is")
+        self.assertIn("[REDACTED", found[4]["text"])
+        self.assertLess(len(found[4]["text"]), 1600, "a long result is cut")
+        self.assertIn("more characters]", found[4]["text"])
+        self.assertTrue(found[5].get("sub"), "a subagent's step is marked")
+        self.assertNotIn("sub", found[3])
+        with unittest.mock.patch.dict("os.environ", {"MY_SERVICE_TOKEN": "s3cr3t-value-of-this-server"}):
+            self.append({"type": "assistant", "message": {"content": [{"type": "text", "text": "env: s3cr3t-value-of-this-server"}]}})
+            found, _ = livelog.read(self.log, offset, ())
+        self.assertEqual(found[0]["text"], "env: [REDACTED CREDENTIAL]", "the server's own credentials never appear")
+
+    def test_a_long_log_opens_near_its_end_and_a_long_line_is_skipped(self):
+        from evolve_vista import livelog
+        self.append(*[{"type": "assistant", "message": {"content": [{"type": "text", "text": f"step {i}"}]}} for i in range(50)])
+        with unittest.mock.patch.object(livelog, "TAIL_ENTRIES", 5):
+            found, _ = livelog.read(self.log, None)
+        self.assertEqual([e["text"] for e in found], [f"step {i}" for i in range(45, 50)])
+        with unittest.mock.patch.object(livelog, "TAIL_BYTES", 200):
+            found, _ = livelog.read(self.log, None)
+        self.assertTrue(found and found[-1]["text"] == "step 49" and all(e["text"].startswith("step ") for e in found),
+                        "a cut first line is dropped, not shown as garbage")
+        offset = self.log.stat().st_size
+        with unittest.mock.patch.object(livelog, "CHUNK_BYTES", 128):
+            self.append({"type": "assistant", "message": {"content": [{"type": "text", "text": "x" * 500}]}},
+                        {"type": "assistant", "message": {"content": [{"type": "text", "text": "after"}]}})
+            found, offset = livelog.read(self.log, offset)
+            self.assertEqual(found[0]["kind"], "system")
+            self.assertIn("is not shown", found[0]["text"])
+            found, offset = livelog.read(self.log, offset)
+        self.assertEqual([e["text"] for e in found], ["after"])
+
+    def test_the_stream_sends_new_entries_only_and_carries_on_after_a_reconnect(self):
+        response = self.open()
+        self.assertEqual((response.status, response.getheader("Content-Type")), (200, "text/event-stream"))
+        self.assertEqual(self.batch(response), (None, []), "connected; the agent has not started yet")
+        self.append(*LIVE[:4], partial='{"type": "assistant", "mess')
+        first, found = self.batch(response)
+        self.assertEqual([e["kind"] for e in found], ["system", "thinking", "text", "tool"], "the line being written waits")
+        with open(self.log, "a") as f:
+            f.write('age": {"content": [{"type": "text", "text": "Done measuring."}]}}\n')
+        second, found = self.batch(response)
+        self.assertEqual(found, [{"kind": "text", "text": "Done measuring."}])
+        self.assertEqual(int(second), self.log.stat().st_size)
+        response.close()
+        self.append({"type": "result", "subtype": "success", "num_turns": 3, "total_cost_usd": 0.25, "result": "Shorter."})
+        again = self.open(last=second)
+        _, found = self.batch(again)
+        self.assertEqual(found, [{"kind": "done", "text": "Finished · 3 turns · $0.25\nShorter."}], "nothing sent twice")
+
+    def test_what_the_live_log_refuses(self):
+        self.assertEqual(self.get("/api/campaign/agent-log?task=golf&session=s004")[0], 403, "no token")
+        self.assertEqual(self.get("/api/campaign/agent-log?token=wrong&task=golf&session=s004")[0], 403)
+        self.assertEqual(self.get("/api/campaign/agent-log?task=golf&session=s004", **{HEADER: "t0ken"})[0], 403,
+                         "an EventSource carries its token in the address")
+        self.assertEqual(self.get("/api/campaign/agent-log?token=t0ken&task=golf&session=s999")[0], 404)
+        self.assertEqual(self.get("/api/campaign/agent-log?token=t0ken&task=..&session=s004")[0], 400)
+        self.assertEqual(self.get("/api/campaign/agent-log?token=t0ken&task=golf&session=s004",
+                                  Origin="http://evil.example")[0], 403)
+
+    test_the_page_and_the_snapshot = test_the_stream_pushes_a_snapshot_now_and_on_change_only = test_what_is_refused = None
+
+
+def gen(n: int, **more) -> dict:
+    """An assistant line of a Claude Code log whose model call went through OpenRouter."""
+    return {"type": "assistant", "request_id": f"gen-{n}", "timestamp": f"2026-11-26T22:00:{n:02d}.000Z",
+            "message": {"content": [{"type": "text", "text": f"step {n}"}], "usage": {"output_tokens": 0}}, **more}
+
+
+class FakeOpenRouter:
+    """OpenRouter's generation endpoint: numbers for a call after `ready` lookups of it; or a refusal."""
+
+    def __init__(self, ready=1, refuse=None, busy_once=False):
+        self.ready, self.refuse, self.busy_once = ready, refuse, busy_once
+        self.asked, self.keys = [], set()
+        self.lock = threading.Lock()
+
+    def __call__(self, generation, key):
+        from evolve_vista import apistats
+        with self.lock:
+            self.asked.append(generation)
+            self.keys.add(key)
+            if self.refuse:
+                raise apistats.Refused()
+            if self.busy_once:
+                self.busy_once = False
+                raise apistats.Busy(0.2)
+            if self.asked.count(generation) < self.ready:
+                return None   # OpenRouter has no numbers for a call this fresh
+        n = int(generation.split("-")[1])
+        return {"id": generation, "latency": 500 + n, "generation_time": 2000, "native_tokens_completion": 100 * n,
+                "created_at": "2026-11-26T22:00:00Z", "finish_reason": "tool_calls", "usage": n / 1000,
+                "provider_responses": [{"provider_name": "Old"}, {"provider_name": "Inkling"}]}
+
+
+class ApiStatsTest(ServerTest):
+    """How fast the agent's model answered each call, looked up at OpenRouter by the server, never by the page."""
+
+    def setUp(self):
+        super().setUp()
+        from evolve_vista import apistats
+        self.apistats = apistats
+        self.log = self.campaign / "tasks" / "golf" / "sessions" / "s004" / "raw" / "agent.jsonl"
+        self.log.parent.mkdir(parents=True)
+        patch = unittest.mock.patch.object(apistats, "RETRIES", (0.05, 0.05, 0.05))
+        patch.start(); self.addCleanup(patch.stop)
+
+    def use(self, fake, key="or-key-123"):
+        self.server.api_stats = self.apistats.ApiStats(key=key, fetch=fake)
+
+    def append(self, *events, partial=""):
+        with open(self.log, "a") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in events) + partial)
+
+    def settle(self, calls, until):
+        for _ in range(200):
+            calls.advance()
+            view = calls.view()
+            if until(view):
+                return view
+            threading.Event().wait(0.02)
+        self.fail(f"never settled: {calls.view()}")
+
+    def test_calls_are_found_once_each_with_their_time(self):
+        lines = [gen(1), gen(1), gen(2, parent_tool_use_id="t9"), {"type": "user", "request_id": "gen-9"},
+                 {"type": "system", "subtype": "thinking_tokens"}]
+        found = self.apistats.calls(("\n".join(json.dumps(l) for l in lines) + "\nnot json").encode())
+        self.assertEqual(found, [("gen-1", "2026-11-26T22:00:01.000Z", False), ("gen-2", "2026-11-26T22:00:02.000Z", True)],
+                         "one call per request id, assistant lines only, a subagent's marked")
+
+    def test_a_point_is_ttft_and_tokens_over_generation_time(self):
+        p = self.apistats.point("gen-3", FakeOpenRouter()("gen-3", "k"), "2026-11-26T22:00:03.000Z", False)
+        self.assertEqual(p, {"id": "gen-3", "time": "2026-11-26T22:00:03.000Z", "ttft": 503, "gen": 2000, "tokens": 300,
+                             "tps": 150.0, "provider": "Inkling", "finish": "tool_calls", "cost": 0.003, "sub": False})
+        self.assertIsNone(self.apistats.point("gen-3", {"id": "gen-3"}, None, False), "no timings, no point")
+        self.assertEqual(self.apistats.point("gen-3", {"latency": 1, "total_cost": 0.5}, None, False)["cost"], 0.5)
+
+    def test_lookups_wait_for_the_numbers_back_off_and_are_kept(self):
+        fake = FakeOpenRouter(ready=3, busy_once=True)
+        self.use(fake)
+        self.append(gen(1), gen(2), partial='{"type": "assistant", "request_id": "gen-3"')
+        calls = self.server.api_stats.session(self.campaign, "golf", "s004")
+        view = self.settle(calls, lambda v: len(v["points"]) == 2)
+        self.assertEqual([p["id"] for p in view["points"]], ["gen-1", "gen-2"], "the line being written waits")
+        self.assertEqual((view["state"], view["calls"], view["waiting"]), ("ok", 2, 0))
+        self.assertEqual(fake.asked.count("gen-1"), 3, "asked again until OpenRouter had the numbers, once more after a 429")
+        self.assertEqual(fake.keys, {"or-key-123"})
+        kept = self.campaign / "vista" / "golf" / "s004" / "api-stats.json"
+        self.assertEqual(len(json.loads(kept.read_text())["points"]), 2)
+        self.assertNotIn("or-key-123", kept.read_text())
+        # a restarted server reads what was found and asks only about calls it does not know
+        again = FakeOpenRouter()
+        self.use(again)
+        with open(self.log, "a") as f:
+            f.write(',"timestamp": "2026-11-26T22:00:03.000Z"}\n')
+        calls = self.server.api_stats.session(self.campaign, "golf", "s004")
+        view = self.settle(calls, lambda v: len(v["points"]) == 3)
+        self.assertEqual(again.asked, ["gen-3"])
+
+    def test_a_call_openrouter_never_has_is_given_up(self):
+        self.use(FakeOpenRouter(ready=99))
+        self.append(gen(1))
+        calls = self.server.api_stats.session(self.campaign, "golf", "s004")
+        view = self.settle(calls, lambda v: v["missing"] == 1)
+        self.assertEqual((view["points"], view["waiting"]), ([], 0))
+
+    def test_without_openrouter_there_are_no_lookups(self):
+        fake = FakeOpenRouter()
+        self.use(fake, key="")
+        self.append(gen(1))
+        self.assertEqual(self.settle(self.server.api_stats.session(self.campaign, "golf", "s004"), lambda v: True)["state"], "no-key")
+        self.use(fake)
+        other = self.campaign / "tasks" / "golf" / "sessions" / "s003" / "raw" / "agent.jsonl"
+        other.parent.mkdir(parents=True)
+        other.write_text(json.dumps({**gen(1), "request_id": "msg_011CXyz"}) + "\n")
+        calls = self.server.api_stats.session(self.campaign, "golf", "s003")
+        self.assertEqual(self.settle(calls, lambda v: v["calls"] == 1)["state"], "not-openrouter")
+        self.use(FakeOpenRouter(refuse=True))
+        calls = self.server.api_stats.session(self.campaign, "golf", "s004")
+        self.assertEqual(self.settle(calls, lambda v: v["state"] == "refused")["points"], [])
+        self.assertEqual(fake.asked, [], "no lookup without a key or for another provider's ids")
+
+    def test_the_stream_replays_the_points_then_sends_each_new_one_once(self):
+        import http.client
+        self.use(FakeOpenRouter())
+        self.append(gen(1), gen(2))
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+        connection.request("GET", "/api/campaign/agent-api-stats?token=t0ken&task=golf&session=s004")
+        response = connection.getresponse()
+        self.addCleanup(connection.close)
+        self.assertEqual((response.status, response.getheader("Content-Type")), (200, "text/event-stream"))
+
+        def stats():
+            lines = []
+            while True:
+                line = response.fp.readline().decode().rstrip("\n")
+                if line == "" and any(l.startswith("data: ") for l in lines):
+                    return json.loads(next(l for l in lines if l.startswith("data: "))[6:])
+                if line and not line.startswith(":"):
+                    lines.append(line)
+        seen = []
+        while len(seen) < 2:
+            seen += [p["id"] for p in stats()["points"]]
+        self.assertEqual(seen, ["gen-1", "gen-2"])
+        self.append(gen(3))
+        while len(seen) < 3:
+            batch = stats()
+            seen += [p["id"] for p in batch["points"]]
+        self.assertEqual(seen, ["gen-1", "gen-2", "gen-3"], "nothing sent twice")
+        self.assertEqual((batch["state"], batch["calls"]), ("ok", 3))
+        self.assertNotIn("or-key", json.dumps(batch))
+
+    def test_a_session_costs_what_openrouter_charged_for_its_calls(self):
+        self.use(FakeOpenRouter(ready=2))
+        self.append(gen(1), gen(2), gen(3))
+        calls = self.server.api_stats.session(self.campaign, "golf", "s004")
+        calls.advance()
+        early = calls.summary()
+        self.assertEqual((early["calls"], early["priced"], early["cost"]), (3, 0, 0), "nothing priced before OpenRouter answers")
+        self.settle(calls, lambda v: v["priced"] == 3)
+        self.assertEqual(calls.summary(), {"state": "ok", "calls": 3, "waiting": 0, "cost": 0.006, "priced": 3})
+
+    def test_numbers_kept_before_costs_were_recorded_are_asked_about_once_more(self):
+        kept = self.campaign / "vista" / "golf" / "s004" / "api-stats.json"
+        write(kept, {"points": [{"id": f"gen-{n}", "time": None, "ttft": 1, "gen": 2, "tokens": 3, "tps": 1500.0,
+                                 "provider": "Old", "finish": "stop", "sub": False} for n in (1, 2)]})
+        fake = FakeOpenRouter()
+        self.use(fake)
+        self.append(gen(1), gen(2))
+        calls = self.server.api_stats.session(self.campaign, "golf", "s004")
+        calls.advance()
+        self.assertEqual(len(calls.view()["points"]), 2, "the kept timings show at once")
+        view = self.settle(calls, lambda v: v["priced"] == 2)
+        self.assertEqual((view["cost"], sorted(fake.asked)), (0.003, ["gen-1", "gen-2"]))
+        self.assertTrue(all("cost" in p for p in json.loads(kept.read_text())["points"]))
+        calls.advance()
+        self.assertEqual(len(fake.asked), 2, "asked once, not again")
+
+    def test_the_campaign_total_counts_every_session_that_ran_an_agent(self):
+        import http.client
+        self.use(FakeOpenRouter())
+        self.append(gen(1), gen(2))
+        other = self.campaign / "tasks" / "golf" / "sessions" / "s003" / "raw" / "agent.jsonl"
+        other.parent.mkdir(parents=True)
+        other.write_text(json.dumps(gen(4)) + "\n")
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+        connection.request("GET", "/api/campaign/api-costs?token=t0ken")
+        response = connection.getresponse()
+        self.addCleanup(connection.close)
+        self.assertEqual(response.status, 200)
+        while True:
+            line = response.fp.readline().decode()
+            if line.startswith("data: "):
+                costs = json.loads(line[6:])
+                if costs["complete"] and len(costs["sessions"]) == 2 and costs["cost"]:
+                    break
+        self.assertEqual(sorted(costs["sessions"]), ["golf/s003", "golf/s004"], "the baseline ran no agent")
+        self.assertEqual((costs["sessions"]["golf/s004"]["cost"], costs["sessions"]["golf/s003"]["cost"], costs["cost"]),
+                         (0.003, 0.004, 0.007))
+        self.assertEqual(self.get("/api/campaign/api-costs?token=wrong")[0], 403)
+
+    def test_without_a_key_the_cost_stays_claude_codes(self):
+        self.use(FakeOpenRouter(), key="")
+        self.append(gen(1))
+        costs = self.server.api_stats.costs(self.campaign)
+        self.assertEqual((costs["state"], costs["cost"], costs["sessions"]["golf/s004"]["priced"]), ("no-key", 0, 0),
+                         "nothing priced: the page keeps the cost the snapshot reports")
+        self.assertEqual(snapshot(self.campaign)["tasks"][0]["nodes"][1]["cost"], 0.5)
+
+    def test_what_the_api_stats_stream_refuses(self):
+        self.assertEqual(self.get("/api/campaign/agent-api-stats?task=golf&session=s004")[0], 403, "no token")
+        self.assertEqual(self.get("/api/campaign/agent-api-stats?token=wrong&task=golf&session=s004")[0], 403)
+        self.assertEqual(self.get("/api/campaign/agent-api-stats?token=t0ken&task=golf&session=s999")[0], 404)
+        self.assertEqual(self.get("/api/campaign/agent-api-stats?token=t0ken&task=..&session=s004")[0], 400)
+
+    test_the_page_and_the_snapshot = test_the_stream_pushes_a_snapshot_now_and_on_change_only = test_what_is_refused = None
+
+
+if __name__ == "__main__":
+    unittest.main()

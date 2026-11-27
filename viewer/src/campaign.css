@@ -247,3 +247,52 @@
 .vista-log li{padding:3px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .vista-log li:last-child{border-bottom:0;color:var(--text)}
 .vista-log-empty{display:flex;align-items:center;justify-content:center;color:var(--text-3);font-family:var(--font-sans)}
+
+/* a running session's agent log, as it is written */
+.live-badge{font-size:10.5px;font-weight:600;letter-spacing:.3px;padding:1px 8px;border-radius:999px;background:var(--cv-first-soft);color:var(--cv-first)}
+.vista-views{margin-left:auto;display:inline-flex;border:1px solid var(--line-strong);border-radius:7px;overflow:hidden}
+.vista-views button{border:0;border-radius:0;padding:3px 10px;font-size:11px;background:transparent;color:var(--text-2)}
+.vista-views button.on{background:var(--surface);color:var(--text);font-weight:600}
+.vista-views+.vista-again{margin-left:6px}
+.vista-ended{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--text-2)}
+.live-log-wrap{flex:1;min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}
+.live-log{flex:1;min-height:0;overflow:auto;padding:8px 12px;font:12px/1.55 var(--font-sans);color:var(--text)}
+.live-empty{height:100%;min-height:120px;display:flex;align-items:center;justify-content:center;color:var(--text-3)}
+.live-entry{padding:4px 0;border-bottom:1px solid var(--line-soft);white-space:pre-wrap;overflow-wrap:anywhere}
+.live-entry:last-child{border-bottom:0}
+.live-entry pre{margin:0;max-height:13em;overflow:auto;padding:5px 8px;border-radius:6px;background:var(--surface-2);font:11px/1.5 var(--font-mono);color:var(--text-2);white-space:pre-wrap;overflow-wrap:anywhere}
+.live-thinking{color:var(--text-3);font-style:italic}
+.live-entry .live-tool{display:inline-block;margin-right:8px;padding:0 6px;border-radius:4px;background:var(--cv-first-soft);color:var(--cv-first);font-weight:600}
+.live-input{font:11.5px/1.5 var(--font-mono);color:var(--text)}
+.live-error pre{background:var(--cv-failed-soft);color:var(--cv-failed)}
+.live-system{color:var(--text-3);font-size:11px}
+.live-done{color:var(--cv-better);font-weight:600}
+.live-sub{margin-left:14px;padding-left:8px;border-left:2px solid var(--line-strong)}
+.live-foot{display:flex;align-items:center;gap:8px;padding:5px 10px;border-top:1px solid var(--line);font-size:11px;color:var(--text-3);background:var(--surface-2)}
+.live-foot button{margin-left:auto;font-size:11px;padding:2px 9px}
+.live-dot{width:7px;height:7px;border-radius:50%;background:var(--cv-none)}
+.live-dot-live{background:var(--cv-better);box-shadow:0 0 0 3px var(--cv-better-soft)}
+.live-dot-lost,.live-dot-refused{background:var(--cv-failed)}
+
+/* how fast the agent's model answered, above its log: the two halves share the area */
+.api-charts{flex:1 1 0;min-height:200px;display:flex;flex-direction:column;gap:6px}
+.api-charts~.live-log-wrap{flex:1 1 0}
+.api-chart{flex:1 1 0;min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:6px 8px 2px}
+.api-chart-head{display:flex;align-items:baseline;gap:10px;font-size:11.5px;color:var(--text)}
+.api-chart-head span{color:var(--text-3);font-size:11px;font-variant-numeric:tabular-nums}
+.api-plot{position:relative;flex:1;min-height:60px}
+.api-plot svg{position:absolute;inset:0;display:block;touch-action:none}
+.api-plot-empty{display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-3)}
+.api-grid{stroke:var(--line);stroke-width:1}
+.api-tick{fill:var(--text-3);font-size:10px;font-variant-numeric:tabular-nums}
+.api-dot{fill:var(--cv-first);fill-opacity:.28;stroke:var(--surface);stroke-width:1}
+.api-dot.api-clipped{fill-opacity:.6}
+.api-dot.on{fill-opacity:1;stroke:var(--text);stroke-width:1.5}
+.api-roll{fill:none;stroke:var(--cv-first);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.api-cross{stroke:var(--line-strong);stroke-width:1;stroke-dasharray:3 3}
+.api-tip{position:absolute;z-index:2;width:180px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);box-shadow:0 2px 8px rgba(0,0,0,.08);font-size:11px;line-height:1.5;color:var(--text);pointer-events:none;font-variant-numeric:tabular-nums}
+.api-tip-meta{color:var(--text-3)}
+.api-foot{margin:0;font-size:10.5px;color:var(--text-3)}
+.api-note{margin:0;font-size:11px;color:var(--text-3)}
+.campaign-cost{font-variant-numeric:tabular-nums}
+.api-cost{margin-right:8px;color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}

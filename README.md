@@ -54,8 +54,8 @@ address printed: it carries the token the page needs.
 | **Time** | Each circle's edge is the session's time limit: dashed while unused, solid as the session uses it, from twelve o'clock. **Violet** is development, the agent at work; **teal** is validation, its work evaluated or measured again. A running session's ring grows as it runs; one that took longer than its limit (validation comes after it) fills the ring, each phase in proportion. |
 | **Best-so-far curve** | Each session's value in archive order, the best reached so far, and the reference it is read against. A ratio metric spanning more than a factor of twenty is drawn on a log scale. |
 | **Session details** | Click a circle or a point: its measurements, flags, timing, cost and the report the agent wrote open under the curve. Drag them out by the title bar to float beside the page; ⤓ puts them back. |
-| **Session log** | Beside the lineage: the agent log of the running session as it is written, followed every two seconds (the newest session still developing when several run). Click a circle for that session's log; click the running session's circle to follow it again. |
-| **Analysis** | **Analyse with TraceVista** above the log, or a circle dragged onto it, opens the session's TraceVista analysis. See [below](#analyse-a-session). |
+| **Session log** | Beside the lineage: the agent log of the running session as it is written (the newest session still developing when several run), with how fast its model answers when it reaches it through OpenRouter. Click a circle for that session's log; click the running session's circle to follow it again. See [below](#follow-a-running-session). |
+| **Analysis** | **Analyse with TraceVista** above the log, or a circle dragged onto it, opens the session's TraceVista analysis once the session has ended. See [below](#analyse-a-session). |
 
 Colours of a circle read against the parent: **green** better, **grey** worse or unchanged, **blue** the first measured or
 still running. A **gold** ring marks the best. A hollow grey circle is a session that is not valid; a hollow
@@ -67,7 +67,8 @@ Everything except the analysis is read from the campaign's archive. No model is 
 
 Click **Analyse with TraceVista** above a session's log, or drag a circle of the lineage onto the log. The page
 shows that session's TraceVista analysis, the same state map the TraceVista skill makes, inside the TraceVista viewer. First the server extracts
-the session's agent log (`raw/agent.jsonl`) with the skill's `extract_timeline.py`: redacted, images omitted.
+the session's agent log (`raw/agent.jsonl`, or `raw/agent.log` in runs made by InfiniEvolve's local adapter
+before it adopted that name) with the skill's `extract_timeline.py`: redacted, images omitted.
 Then **Written by** picks who writes the analysis.
 
 **An agent on the serving machine** (the default when one is available). It starts in
@@ -84,6 +85,9 @@ same checks. The page shows what the agent is doing, can stop it, and finds it a
 Each of these is offered when it is installed: Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor CLI,
 GitHub Copilot CLI, Amp, Goose and Factory Droid. Each is started unattended as its documentation describes;
 only Claude Code and Codex have been run this way here, and the page marks the others untested.
+The page picks the agent you started it from (run `infinievolve watch` inside Codex and Codex is picked),
+or the first `--analyst`, until you pick another; it remembers that pick. Started over ssh or by a
+service, it cannot tell, and picks the first installed agent.
 
 `--analyst` adds a particular model, or any other agent:
 
@@ -121,6 +125,42 @@ The result is kept under `<campaign>/vista/<task>/<session>/` and opens at once 
 **Analyse again** starts anew. A session without an agent log, such as the baseline, has nothing
 to analyse.
 
+## Follow a running session
+
+The area beside the lineage shows the running session's agent log, under its time against its limit (development,
+then validation), as the agent writes it (`raw/agent.jsonl`): the agent's text, its thinking where the log
+keeps it, each tool call with its command or file, each result (cut to 1,500 characters) and every error, a
+subagent's steps indented. The view follows the newest step unless you scroll up; **Jump to the latest** follows
+it again. The page keeps the last 2,000 steps; a new view of a long log starts from its last 400.
+
+The log is redacted with the TraceVista skill's own patterns, those its timeline extraction uses, and the values
+of the server's own credentials (environment variables named like a token, key, secret or password) never
+appear. A running session has no complete trace yet, so **Analyse with TraceVista** waits for it to end. Any
+session's circle, clicked, shows its log here; **Back to the log** returns from its analysis.
+
+### How fast the agent's model answers
+
+When the agent reaches its model through OpenRouter, the area charts each of its calls to the
+model over time, with the log below. One chart shows the **time to first token**, with a rolling median over the
+last 15 calls. The other shows **tokens per second**: tokens over OpenRouter's generation time, with a rolling
+token-weighted rate over the last 15 calls. Each call is a dot, larger for more tokens, because short replies
+are dominated by overhead. Hovering a dot shows its time, TTFT, TPS, tokens, provider and finish reason.
+
+The server finds the calls by the `request_id` each assistant line of the log carries (OpenRouter's `gen-...`
+generation id) and asks OpenRouter's generation endpoint about each, with the `OPENROUTER_API_KEY` it was
+started with. The key never reaches the page. OpenRouter has a call's numbers a few seconds after it ends, so
+the server tries again with backoff. It runs at most four lookups at once and pauses when told to slow down.
+It keeps what it found in `<campaign>/vista/<task>/<session>/api-stats.json`, so a restart does not ask again.
+Without the key, or for an agent whose ids are not OpenRouter's, the area says so in a line and the log takes
+the whole area. A finished session's charts work the same way, without new points.
+
+**What a session cost.** OpenRouter also says what it charged for each call. The server adds these up for
+every session of the campaign that ran an agent, not only the one in view. A session's details then show
+**Cost (OpenRouter)** instead of the cost Claude Code reports at the end. Claude Code prices an OpenRouter
+model with its own price table, and it reports nothing for a session that has not ended. The page header shows
+the campaign's total. While some calls are not priced yet, both read "≥". Without OpenRouter numbers, the
+details keep Claude Code's cost.
+
 ## How it works
 
 **Reading a campaign.** The page reads a campaign with InfiniEvolve's own snapshot (`infinievolve.snapshot`),
@@ -132,10 +172,13 @@ own reader (`evolve_vista/campaign.py`).
 only when the campaign changed: a session submitted, archived, re-measured or flagged. To notice, it compares
 the modification times of the files it reads once a second. **Freeze view** closes the connection so the page
 holds still while you read; the campaign keeps running. It is hidden once every task has stopped.
+A running session's agent log comes the same way, on a second connection while it is open: the server reads the
+log from where it last stopped, once a second, and sends only whole new lines.
 
 **Confined.** The server binds to 127.0.0.1 only, reads the campaign directory and writes only the analyses
-under `vista/`, and answers only the page that carries the token in the printed address. It starts an agent
-only when you ask for one. It needs Python 3.10 or newer and no packages.
+and the model-call numbers under `vista/`, and answers only the page that carries the token in the printed
+address. It starts an agent only when you ask for one. It contacts nothing but OpenRouter, and only when it was
+started with `OPENROUTER_API_KEY` and a watched session's agent uses OpenRouter. It needs Python 3.10 or newer and no packages.
 
 ## TraceVista
 

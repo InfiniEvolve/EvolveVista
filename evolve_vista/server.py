@@ -26,7 +26,7 @@ import time
 from typing import Callable, NamedTuple
 from urllib.parse import parse_qs, urlsplit
 
-from . import campaign, sessions, vista
+from . import apistats, campaign, livelog, sessions, vista
 
 STATIC = Path(__file__).resolve().parent / "static"
 PAGE = "campaign.html"
@@ -70,6 +70,7 @@ class VistaServer(ThreadingHTTPServer):
         self.vista_lock = threading.Lock()   # one extraction or compilation at a time
         self.analysts = analysts             # the agents a reader may start to analyse a session, or None
         self.cached: tuple[str, bytes] | None = None
+        self.api_stats = apistats.ApiStats()   # the key is read here, once; it never leaves this process
         self.closing = threading.Event()
         super().__init__(("127.0.0.1", port), Handler)
 
@@ -90,6 +91,7 @@ class VistaServer(ThreadingHTTPServer):
 
     def server_close(self):
         self.closing.set()   # ends the open streams
+        self.api_stats.pool.shutdown(wait=False, cancel_futures=True)
         super().server_close()
 
 
@@ -130,6 +132,20 @@ class Handler(BaseHTTPRequestHandler):
             if not secrets.compare_digest(token, self.server.token):
                 self.respond(403, b'{"error":"Open the address the watch command printed"}'); return
             self.stream(); return
+        if url.path == "/api/campaign/agent-log":
+            query = parse_qs(url.query)
+            if not secrets.compare_digest((query.get("token") or [""])[0], self.server.token):
+                self.respond(403, b'{"error":"Open the address the watch command printed"}'); return
+            self.agent_log(query); return
+        if url.path == "/api/campaign/api-costs":
+            if not secrets.compare_digest((parse_qs(url.query).get("token") or [""])[0], self.server.token):
+                self.respond(403, b'{"error":"Open the address the watch command printed"}'); return
+            self.api_costs(); return
+        if url.path == "/api/campaign/agent-api-stats":
+            query = parse_qs(url.query)
+            if not secrets.compare_digest((query.get("token") or [""])[0], self.server.token):
+                self.respond(403, b'{"error":"Open the address the watch command printed"}'); return
+            self.agent_api_stats(query); return
         if url.path.startswith("/api/campaign/vista"):
             self.vista("GET", url); return
         if url.path == "/api/campaign":   # the snapshot once, for scripts; the page uses the stream
@@ -188,6 +204,103 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(b"id: " + current.encode() + b"\nevent: snapshot\ndata: " + body + b"\n\n")
                     self.wfile.flush()
                     sent, quiet = current, time.monotonic()
+                elif time.monotonic() - quiet > KEEPALIVE_SECONDS:
+                    self.wfile.write(b": keepalive\n\n"); self.wfile.flush()
+                    quiet = time.monotonic()
+                self.server.closing.wait(CHECK_SECONDS)
+        except OSError:
+            pass   # the page went away
+
+    def agent_log(self, query: dict):
+        """A session's agent log as it grows: an event per batch of new entries, its id the offset reached."""
+        task, session = (query.get("task") or [""])[0], (query.get("session") or [""])[0]
+        try:
+            log = livelog.log_for(self.server.campaign, task, session)
+            livelog.redactor()   # refuse before streaming when the log could not be redacted
+        except vista.VistaError as error:
+            self.respond(error.status, json.dumps({"error": str(error)}).encode()); return
+        given = self.headers.get("Last-Event-ID") or ""
+        offset = int(given) if given.isdigit() else None
+        private = (str(self.server.campaign),)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        first, quiet = True, time.monotonic()
+        try:
+            self.wfile.write(b"retry: 3000\n\n"); self.wfile.flush()
+            while not self.server.closing.is_set():
+                batch, moved = [], False
+                if log.is_file() and log.stat().st_size != offset:
+                    try:
+                        batch, reached = livelog.read(log, offset, private)
+                    except OSError:   # e.g. replaced mid-read: try again next time
+                        reached = offset
+                    moved, offset = reached != offset, reached
+                if batch or moved or first:   # an empty batch still moves the id on, and the first says "connected"
+                    data = json.dumps({"entries": batch}, ensure_ascii=False).encode()
+                    self.wfile.write((f"id: {offset}\n" if offset is not None else "").encode() + b"event: entries\ndata: "
+                                     + data + b"\n\n"); self.wfile.flush()
+                    first, quiet = False, time.monotonic()
+                elif time.monotonic() - quiet > KEEPALIVE_SECONDS:
+                    self.wfile.write(b": keepalive\n\n"); self.wfile.flush()
+                    quiet = time.monotonic()
+                if not (moved and log.stat().st_size > offset):   # more to read at once, else wait
+                    self.server.closing.wait(CHECK_SECONDS)
+        except OSError:
+            pass   # the page went away
+
+    def api_costs(self):
+        """What OpenRouter charged for each session of the campaign so far, and in all: sent when it changes."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        last, quiet = None, time.monotonic()
+        try:
+            self.wfile.write(b"retry: 3000\n\n"); self.wfile.flush()
+            while not self.server.closing.is_set():
+                try:
+                    data = json.dumps(self.server.api_stats.costs(self.server.campaign), ensure_ascii=False).encode()
+                except OSError:
+                    data = None
+                if data and data != last:
+                    self.wfile.write(b"event: costs\ndata: " + data + b"\n\n"); self.wfile.flush()
+                    last, quiet = data, time.monotonic()
+                elif time.monotonic() - quiet > KEEPALIVE_SECONDS:
+                    self.wfile.write(b": keepalive\n\n"); self.wfile.flush()
+                    quiet = time.monotonic()
+                self.server.closing.wait(CHECK_SECONDS)
+        except OSError:
+            pass   # the page went away
+
+    def agent_api_stats(self, query: dict):
+        """How fast the session's model answered: every point found so far, then each new one as it is found."""
+        task, session = (query.get("task") or [""])[0], (query.get("session") or [""])[0]
+        try:
+            calls = self.server.api_stats.session(self.server.campaign, task, session)
+        except vista.VistaError as error:
+            self.respond(error.status, json.dumps({"error": str(error)}).encode()); return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        sent, last, quiet = set(), None, time.monotonic()
+        try:
+            self.wfile.write(b"retry: 3000\n\n"); self.wfile.flush()
+            while not self.server.closing.is_set():
+                try:
+                    calls.advance()
+                except OSError:
+                    pass   # e.g. the log replaced mid-read: try again next time
+                view = calls.view()
+                new = [p for p in view["points"] if p["id"] not in sent]
+                summary = (view["state"], view["calls"], view["waiting"], view["missing"])
+                if new or summary != last:   # each page gets every point once, and the counts when they change
+                    sent.update(p["id"] for p in new)
+                    data = json.dumps({**view, "points": new}, ensure_ascii=False).encode()
+                    self.wfile.write(b"event: stats\ndata: " + data + b"\n\n"); self.wfile.flush()
+                    last, quiet = summary, time.monotonic()
                 elif time.monotonic() - quiet > KEEPALIVE_SECONDS:
                     self.wfile.write(b": keepalive\n\n"); self.wfile.flush()
                     quiet = time.monotonic()

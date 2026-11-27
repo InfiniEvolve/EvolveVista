@@ -28,7 +28,9 @@ import time
 from pathlib import Path
 
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
-LOGS = ("raw/agent.jsonl",)   # where a session keeps its agent's log
+# where a session keeps its agent's log: agent.jsonl, or agent.log in runs made by InfiniEvolve's local
+# adapter before it adopted that name
+LOGS = ("raw/agent.jsonl", "raw/agent.log")
 HERE = Path(__file__).resolve().parent
 
 
@@ -376,7 +378,6 @@ def handle(server, method: str, route: str, query: dict, read_body) -> tuple:
         GET  ?task=&session=               whether the session was analysed, and its agent's job
         GET  /timeline?task=&session=      its extracted timeline, for a model the page asks
         GET  /graph?task=&session=         the compiled trajectory graph
-        GET  /log?task=&session=&from=     the session's own agent log from byte from on (-1: its end)
         POST /build?task=&session=         compile the analysis in the body (strict=0: allow reading gaps)
         POST /agent?task=&session=&analyst=   start an agent; the body is {"facts", "model", "effort"}
         POST /agent/stop?task=&session=    stop it
@@ -395,13 +396,6 @@ def handle(server, method: str, route: str, query: dict, read_body) -> tuple:
         elif method == "GET" and route == "/timeline":
             with server.vista_lock:
                 answer = timeline(root, task, session)
-        elif method == "GET" and route == "/log":
-            from . import sessions   # here, not above: check.py imports this file outside its package
-            try:
-                start = int((query.get("from") or ["-1"])[0])
-            except ValueError:
-                start = -1
-            answer = sessions.read_log(session_dir(root, task, session), start)
         elif method == "GET" and route == "/graph":
             return 200, graph(root, task, session)
         elif method == "POST" and route == "/build":
@@ -489,6 +483,37 @@ PRESETS = {
     "droid": ("droid", "Factory Droid", lambda m, e: [
         "droid", "exec", "--auto", "medium", *_model("-m")(m), "-o", "stream-json", READ_PROMPT], False, {}, False),
 }
+
+
+# How an agent marks the commands it runs, where its source or documentation says so: Claude Code sets CLAUDECODE,
+# Codex CODEX_THREAD_ID (and CODEX_SANDBOX inside its sandbox), Gemini CLI GEMINI_CLI. Any agent in PRESETS is also
+# known by its program's name among the processes that started this one.
+LAUNCH_MARKS = {"claude": ("CLAUDECODE",), "codex": ("CODEX_THREAD_ID", "CODEX_SANDBOX"), "gemini": ("GEMINI_CLI",)}
+
+
+def ancestor_names(limit: int = 40) -> list:
+    """The program names of the processes that started this one, nearest first; none where `ps` is missing."""
+    names, pid = [], os.getppid()
+    while pid > 1 and len(names) < limit:
+        try:
+            row = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True,
+                                 timeout=5, stdin=subprocess.DEVNULL).stdout.strip().split(None, 1)
+            pid = int(row[0])
+        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+            break
+        names.append(Path(row[1]).name if len(row) > 1 else "")
+    return names
+
+
+def launching_agent(environ=None, ancestors=None):
+    """The agent in PRESETS this server was started from: the nearest of its processes named for one, else one
+    whose mark is in the environment (it survives tmux and nohup, which hide the processes); None if neither."""
+    programs = {binary: program for program, (binary, *_) in PRESETS.items()}
+    for name in ancestor_names() if ancestors is None else ancestors:
+        if name in programs:
+            return programs[name]
+    environ = os.environ if environ is None else environ
+    return next((program for program, marks in LAUNCH_MARKS.items() if any(environ.get(m) for m in marks)), None)
 
 
 # What the page offers beside each agent: models to pick from (any other may be typed) and effort levels.
@@ -706,19 +731,24 @@ def activity(work: Path, *private: Path, lines: int = 80) -> list:
 class Analysts:
     """The agents this server may start for an analysis, and the jobs they run."""
 
-    def __init__(self, specs=(), detect: bool = True):
+    def __init__(self, specs=(), detect: bool = True, launcher=None):
+        """Offered in this order, the page picking the first unless the reader picked before: each --analyst
+        setting, then the installed agent that started this server (`launcher`, found when not given), then
+        the other installed agents."""
         self.choices = {}
-        if detect:
-            for program, (binary, label, _, _, _, tested) in PRESETS.items():
-                if shutil.which(binary):
-                    self.choices[program] = {"id": program, "label": label, "detail": binary,
-                                             "untested": not tested, "spec": program, **self.options(program)}
         for spec in specs:
             launch = agent_launch(spec)   # a bad setting fails at start, not on the page
             key = launch["label"] if launch["shell"] else spec
             self.choices[key] = {"id": key, "label": launch["label"], "untested": launch["tested"] is False,
                                  "detail": launch["command"] if launch["shell"] else " ".join(launch["command"][:4]), "spec": spec,
                                  **({} if launch["shell"] else self.options(spec))}
+        if detect:
+            first = launcher if launcher is not None else launching_agent()
+            for program in sorted(PRESETS, key=lambda p: p != first):
+                binary, label, _, _, _, tested = PRESETS[program]
+                if program not in self.choices and shutil.which(binary):
+                    self.choices[program] = {"id": program, "label": label, "detail": binary,
+                                             "untested": not tested, "spec": program, **self.options(program)}
         self.running = {}
 
     @staticmethod

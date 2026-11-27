@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CampaignNode, CampaignTask } from './campaign';
-import { campaignFacts, generate, LOOSE_AFTER, OUTPUT_TOKENS, SYSTEM, userMessage, type AgentJob, type Analyst, type Progress, type VistaApi, type VistaStatus, type VistaTimeline } from './campaign-vista';
+import { campaignFacts, generate, LOOSE_AFTER, OUTPUT_TOKENS, SYSTEM, userMessage, type AgentJob, type Analyst, type LogEntry, type Progress, type VistaApi, type VistaStatus, type VistaTimeline } from './campaign-vista';
 import { useLang } from './i18n';
 import { parseGraph } from '@tracevista/model';
 import ProviderPicker from '@tracevista/ProviderPicker';
@@ -121,14 +121,65 @@ function AgentLog({ lines }: { lines: string[] }) {
     {lines.map((line, i) => <li key={i}>{line}</li>)}</ul>;
 }
 
+const MAX_ENTRIES = 2000;   // a two-hour session writes thousands of steps; the page keeps the latest
+
+/** A session's agent log as it is written: what the agent says, the tools it calls and what they return,
+ * newest last. It follows the end unless the reader scrolled up. */
+export function LiveLog({ api, task, session, running }: { api: VistaApi; task: string; session: string; running: boolean }) {
+  const { t } = useLang();
+  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [dropped, setDropped] = useState(0);
+  const [state, setState] = useState<'connecting' | 'live' | 'lost' | 'refused'>('connecting');
+  const [following, setFollowing] = useState(true);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setEntries([]); setDropped(0); setState('connecting'); setFollowing(true);
+    const source = api.agentLog(task, session);
+    source.addEventListener('entries', event => {
+      setState('live');
+      const batch = (JSON.parse((event as MessageEvent).data).entries ?? []) as LogEntry[];
+      if (!batch.length) return;
+      setEntries(old => {
+        const all = old.concat(batch);
+        if (all.length <= MAX_ENTRIES) return all;
+        setDropped(d => d + all.length - MAX_ENTRIES);
+        return all.slice(-MAX_ENTRIES);
+      });
+    });
+    // EventSource reconnects by itself, from the last offset it was sent; a refusal closes it for good.
+    source.onerror = () => setState(source.readyState === EventSource.CLOSED ? 'refused' : 'lost');
+    return () => source.close();
+  }, [api, task, session]);
+  useEffect(() => { const el = box.current; if (el && following) el.scrollTop = el.scrollHeight; }, [entries, following]);
+  return <div className="live-log-wrap">
+    <div ref={box} className="live-log" onScroll={e => {
+      const el = e.currentTarget; setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < 24); }}>
+      {dropped > 0 && <div className="live-system">{t('{n} earlier steps are no longer kept on this page', { n: dropped.toLocaleString() })}</div>}
+      {!entries.length && <div className="live-empty">{state === 'refused' ? t('The server would not send this session’s log.')
+        : state === 'connecting' ? t('Reading the session…') : t('Waiting for the agent’s first step…')}</div>}
+      {entries.map((e, i) => <div key={i} className={`live-entry live-${e.kind}${e.sub ? ' live-sub' : ''}`}>
+        {e.kind === 'tool' ? <><span className="live-tool">{e.tool}</span><span className="live-input">{e.text}</span></>
+          : e.kind === 'result' || e.kind === 'error' ? <pre>{e.text}</pre> : e.text}</div>)}
+    </div>
+    <div className="live-foot">
+      <span className={`live-dot live-dot-${state}`} />
+      <span>{state === 'live' ? (running ? t('Live: new steps appear as the agent writes them') : t('The session has ended; this is the end of its log')) : state === 'lost' ? t('Connection lost; reconnecting…')
+        : state === 'refused' ? t('Not connected') : t('Connecting…')}</span>
+      {!following && entries.length > 0 && <button type="button" onClick={() => setFollowing(true)}>{t('Jump to the latest')}</button>}
+    </div>
+  </div>;
+}
+
 /** One session's TraceVista analysis, in the pane beside the lineage: the analysis when there is one, else
- * the choice of who writes it, then their progress. */
+ * the choice of who writes it, then their progress. It waits for the session to end: the trace is not complete
+ * before then. */
 export default function SessionVista({ task, node, api }: { task: CampaignTask; node: CampaignNode; api: VistaApi }) {
   const { t } = useLang();
   const [stage, setStage] = useState<Stage>({ kind: 'idle' });
   const [settings, setSettings] = useState<ChatSettings>(loadSettings);
   const [again, setAgain] = useState(0);
   const running = useRef<AbortController | null>(null);
+  const sessionLive = node.status === 'running' || node.status === 'prepared';
   useEffect(() => saveSettings(settings), [settings]);
   // The agents the serving machine offers; the reader picks one, or a model asked from this browser.
   const [analysts, setAnalysts] = useState<Analyst[] | null>(null);
@@ -152,6 +203,7 @@ export default function SessionVista({ task, node, api }: { task: CampaignTask; 
 
   useEffect(() => {
     running.current?.abort(); running.current = null;
+    if (sessionLive) { setStage({ kind: 'idle' }); return; }
     let live = true;
     setStage({ kind: 'loading' });
     api.status(task.name, node.id).then(async (s: VistaStatus) => {
@@ -163,7 +215,7 @@ export default function SessionVista({ task, node, api }: { task: CampaignTask; 
       if (live) setStage({ kind: 'setup', timeline, job: again === 0 ? s.job : null });
     }).catch(e => live && setStage({ kind: 'error', message: t(e instanceof Error ? e.message : String(e)) }));
     return () => { live = false; };
-  }, [api, task.name, node.id, again]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [api, task.name, node.id, again, sessionLive]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => running.current?.abort(), []);
   // An agent runs on the server; ask how it is doing every two seconds, also after a reload.
   const agentRunning = stage.kind === 'agent' && stage.job.state === 'running';
@@ -208,7 +260,8 @@ export default function SessionVista({ task, node, api }: { task: CampaignTask; 
     : p.phase === 'answering' ? t('The model is writing the analysis…') : p.phase === 'thinking' ? t('The model is thinking…') : t('Waiting for the model…');
 
   return <div className="vista-body">
-    {stage.kind === 'loading' ? <div className="task-vista-empty">{t('Reading the session…')}</div>
+    {sessionLive ? <div className="task-vista-empty">{t('{session} is still running. The analysis can be started once the session ends, when its trace is complete.', { session: node.id })}</div>
+      : stage.kind === 'loading' ? <div className="task-vista-empty">{t('Reading the session…')}</div>
       : stage.kind === 'nolog' ? <div className="task-vista-empty">{t('This session has no agent log, so there is no trace to analyse. The baseline runs no agent.')}</div>
       : stage.kind === 'ready' ? <>
         <div className="vista-toolbar">{stage.loose ? <span className="vista-warning">{t('The analysis compiled, but the model left reading gaps that the compiler reports. Analyse again for a fuller reading.')}</span> : <span />}

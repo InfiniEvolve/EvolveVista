@@ -1,17 +1,20 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { LangProvider, LangToggle, useLang } from './i18n';
-import { bestCurve, bestNode, firstTask, layoutTree, parseSnapshot, referenceNode, taskStatus, ticks, tickText, versusParent,
+import { bestCurve, bestNode, firstTask, layoutTree, parseSnapshot, referenceNode, clock, ringParts, taskStatus, ticks, tickText, timeUse, versusParent,
   type CampaignNode, type CampaignSnapshot, type CampaignTask, type Change, type TaskStatus } from './campaign';
 import '@tracevista/trajectory.css';
 import '@tracevista/interface.css';
 import './campaign.css';
-import SessionVista from './CampaignVista';
+import SessionPane, { followed, type PaneState } from './CampaignSession';
 import { vistaApi } from './campaign-vista';
 
 const TOKEN_STORE = 'tracevista.campaign.token';
 const STEP = 36;   // the curve's distance between two sessions
-// the lineage: a circle per session with its words under it, in a column of fixed width where they wrap
-const COLUMN = 124, R = 15, PAD = 20, LABEL_TOP = 8, EDGE_ROOM = 24, VALUE_LINE = 16, SUB_LINE = 14, SUB_SIZE = 10.5;
+// the lineage: a circle per session with its words under it, in a column of fixed width where they wrap.
+// The circle's edge is its ring of time; around it, the best's gold ring (BEST); RIM
+// is how far they reach, where edges end and the words begin.
+const COLUMN = 84, R = 17, PAD = 20, EDGE_ROOM = 22, VALUE_LINE = 16, SUB_LINE = 14, SUB_SIZE = 10.5;
+const RING = R, BEST = R + 5, RIM = R + 9.5, LABEL_GAP = 2;
 const LABEL_WIDTH = COLUMN - 14;
 /** The view's palette (campaign.css): a strong colour for strokes and text, a soft one for fills. */
 type Tone = 'better' | 'worse' | 'same' | 'first' | 'none' | 'failed';
@@ -87,44 +90,98 @@ function treeGeometry(task: CampaignTask, t: T) {
   const tallest = Array.from({ length: depths }, (_, d) =>
     Math.max(VALUE_LINE, ...placed.filter(p => p.depth === d).map(p => labelHeight(words.get(p.id)!))));
   const top: number[] = [];
-  for (let d = 0, y = PAD; d < depths; d++) { top.push(y + R); y += R * 2 + LABEL_TOP + tallest[d] + EDGE_ROOM; }
+  for (let d = 0, y = PAD + RIM; d < depths; d++) { top.push(y); y += RIM + LABEL_GAP + tallest[d] + EDGE_ROOM + RIM; }
   const at = new Map(placed.map(p => [p.id, { x: PAD + COLUMN / 2 + p.row * COLUMN, y: top[p.depth],
-    below: top[p.depth] + R + LABEL_TOP + labelHeight(words.get(p.id)!) }]));
+    below: top[p.depth] + RIM + LABEL_GAP + labelHeight(words.get(p.id)!) }]));
   const width = PAD * 2 + (Math.max(0, ...placed.map(p => p.row)) + 1) * COLUMN;
-  const height = top[depths - 1] + R + LABEL_TOP + tallest[depths - 1] + PAD;
+  const height = top[depths - 1] + RIM + LABEL_GAP + tallest[depths - 1] + PAD;
   return { placed, words, at, width, height };
 }
 /** Wide enough for the tree and a readable curve, no wider. */
 const panelWidth = (task: CampaignTask, t: T) => Math.max(560, treeGeometry(task, t).width + 40);
 
-/** The lineage, top to bottom: one circle per session with its number, its value and change beside it.
- * Colour compares it with its parent; a gold ring marks the best, a dashed one a session still running,
- * a hollow circle one that is not valid or not ranked. */
+/** The time now, in milliseconds, renewed every second while on: what running sessions' rings grow by. */
+function useNow(on: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [on]);
+  return now;
+}
+const live = (n: CampaignNode) => n.status === 'running' || n.status === 'remeasuring';
+/** An arc of a circle from part a to part b of its way round, clockwise from twelve o'clock. */
+function arc(x: number, y: number, r: number, a: number, b: number): string {
+  const point = (f: number) => [x + r * Math.sin(f * 2 * Math.PI), y - r * Math.cos(f * 2 * Math.PI)].map(v => v.toFixed(2)).join(',');
+  return `M${point(a)}A${r},${r} 0 ${b - a > 0.5 ? 1 : 0} 1 ${point(b)}`;
+}
+/** A session's time as a ring: dashed for the time limit, solid as it is used, in the colour of each phase,
+ * developing then checking. */
+function TimeRing({ x, y, r = RING, parts, live: growing }: { x: number; y: number; r?: number; parts: { develop: number; check: number }; live: 'develop' | 'check' | null }) {
+  const piece = (a: number, b: number, kind: 'develop' | 'check') => b - a <= 0.002 ? null
+    : b - a >= 0.999 ? <circle cx={x} cy={y} r={r} className={`tree-time ${kind}${growing === kind ? ' live' : ''}`} />
+    : <path d={arc(x, y, r, a, b)} className={`tree-time ${kind}${growing === kind ? ' live' : ''}`} />;
+  return <g className="tree-ring">
+    <circle cx={x} cy={y} r={r} className="tree-budget" />
+    {piece(0, parts.develop, 'develop')}
+    {piece(parts.develop, parts.develop + parts.check, 'check')}
+  </g>;
+}
+
+/** A session's circle as the lineage draws it, smaller: its number, its colour and its ring of time. */
+function SessionMark({ task, node }: { task: CampaignTask; node: CampaignNode }) {
+  const use = timeUse(node, useNow(live(node))), k = toneOf(task, node), size = 30, c = size / 2;
+  const hollow = pending(node) || node.excluded || !node.valid;
+  const number = /^s\d+$/.test(node.id) ? String(Number(node.id.slice(1))) : node.id;
+  return <svg className="pane-mark" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={node.id}>
+    <title>{`${node.id}: ${node.display}`}</title>
+    <circle cx={c} cy={c} r={c - 2} fill={hollow ? 'var(--surface)' : soft(k)} />
+    <TimeRing x={c} y={c} r={c - 2} parts={ringParts(use, use.limit ?? use.develop + use.check)} live={use.live} />
+    <text x={c} y={c + 4} textAnchor="middle" className="tree-number" fill={ink(k)}>{number}</text>
+  </svg>;
+}
+
+/** The lineage, top to bottom: one circle per session with its number, its value and change under it, each
+ * session over its first child, the others to its right. Colour compares it with its parent; its edge is its time
+ * (development, then validation, against its limit); a gold ring marks the best, a hollow circle one that is
+ * still running, not valid or not ranked. */
 function Tree({ task, selected, onPick, onGrab }: { task: CampaignTask; selected: string | null; onPick: Pick; onGrab?: Grab }) {
   const { t } = useLang();
   const { placed, words, at, width, height } = useMemo(() => treeGeometry(task, t), [task, t]);
+  const now = useNow(task.nodes.some(live));
   if (!placed.length) return <div className="curve-empty">{t('Waiting for the first snapshot.')}</div>;
   const byId = new Map(task.nodes.map(n => [n.id, n]));
   const best = bestNode(task)?.id, path = pathToBest(task);
+  const uses = new Map(task.nodes.map(n => [n.id, timeUse(n, now)]));
+  // sessions without a time limit are drawn against the longest session of the task
+  const longest = Math.max(0, ...[...uses.values()].map(u => u.develop + u.check));
   return <svg className="tree" width={width} height={height} role="img" aria-label={t('Lineage of {task}', { task: task.name })}>
     {task.nodes.filter(n => n.parent && at.has(n.parent)).map(n => {
-      // from under the parent's words to the child's circle, turning halfway down the room between generations
-      const a = at.get(n.parent!)!, b = at.get(n.id)!, from = a.below + 4, mid = b.y - R - EDGE_ROOM / 2;
+      // from under the parent's words to the child's rings, turning halfway down the room between generations
+      const a = at.get(n.parent!)!, b = at.get(n.id)!, from = a.below + 4, end = b.y - RIM, mid = end - EDGE_ROOM / 2;
+      const turn = Math.sign(b.x - a.x) * Math.min(6, Math.abs(b.x - a.x) / 2);
       return <path key={`${n.parent}-${n.id}`} className={`tree-edge${n.status === 'running' ? ' running' : ''}${path.has(n.id) ? ' to-best' : ''}`}
-        d={a.x === b.x ? `M${a.x},${from}V${b.y - R}` : `M${a.x},${from}V${mid - 6}Q${a.x},${mid} ${a.x + Math.sign(b.x - a.x) * 6},${mid}H${b.x - Math.sign(b.x - a.x) * 6}Q${b.x},${mid} ${b.x},${mid + 6}V${b.y - R}`} />;
+        d={Math.abs(a.x - b.x) < 0.5 ? `M${a.x},${from}V${end}` : `M${a.x},${from}V${mid - 6}Q${a.x},${mid} ${a.x + turn},${mid}H${b.x - turn}Q${b.x},${mid} ${b.x},${mid + 6}V${end}`} />;
     })}
     {placed.map(p => {
       const n = byId.get(p.id)!, { x, y } = at.get(p.id)!, k = toneOf(task, n), c = ink(k), w = words.get(p.id)!;
       const hollow = pending(n) || n.excluded || !n.valid;
       const number = /^s\d+$/.test(n.id) ? String(Number(n.id.slice(1))) : n.id;
-      return <g key={n.id} className={`tree-node${pending(n) ? ' pending' : ''}`} onClick={() => onPick(task.name, n.id)}
+      const use = uses.get(n.id)!, parts = ringParts(use, use.limit ?? longest);
+      const timing = [`${t('Development')} ${clock(use.develop)}`, `${t('Validation')} ${clock(use.check)}`,
+        use.limit ? t('limit {time}', { time: clock(use.limit) }) : ''].filter(Boolean).join(' · ');
+      return <g key={n.id} className={`tree-node${pending(n) ? ' pending' : ''}${use.live ? ' ticking' : ''}`} onClick={() => onPick(task.name, n.id)}
         onPointerDown={e => { if (e.button === 0 && onGrab) { e.preventDefault(); onGrab(task.name, n.id, e); } }}>
-        <title>{`${n.id}: ${n.display}`}</title>
-        {selected === n.id && <circle cx={x} cy={y} r={R + 7} className="tree-selected" />}
-        {best === n.id && <circle cx={x} cy={y} r={R + 4.5} className="tree-best" />}
-        <circle cx={x} cy={y} r={R} fill={hollow ? 'var(--surface)' : soft(k)} stroke={c} strokeWidth={1.8} strokeDasharray={pending(n) ? '4 3' : undefined} />
+        <title>{`${n.id}: ${n.display}\n${timing}`}</title>
+        {selected === n.id && <rect x={x - COLUMN / 2 + 3} y={y - RIM + 1} width={COLUMN - 6} height={2 * RIM + LABEL_GAP + labelHeight(w) + 2}
+          rx={8} className="tree-selected" />}
+        {best === n.id && <circle cx={x} cy={y} r={BEST} className="tree-best" />}
+        <circle cx={x} cy={y} r={R} fill={hollow ? 'var(--surface)' : soft(k)} className="tree-dot" />
+        <TimeRing x={x} y={y} parts={parts} live={use.live} />
         <text x={x} y={y + 4} textAnchor="middle" className="tree-number" fill={c}>{number}</text>
-        <foreignObject x={x - LABEL_WIDTH / 2} y={y + R + LABEL_TOP} width={LABEL_WIDTH} height={labelHeight(w) + SUB_LINE} className="tree-words">
+        <foreignObject x={x - LABEL_WIDTH / 2} y={y + RIM + LABEL_GAP} width={LABEL_WIDTH} height={labelHeight(w) + SUB_LINE} className="tree-words">
           <div className="tree-label">
             <b className={n.excluded ? 'struck' : ''}>{w.value}</b>
             {w.change && <em style={{ color: c }}>{w.change}</em>}
@@ -241,8 +298,8 @@ function Report({ text }: { text: string }) {
   })}</div>;
 }
 
-function Details({ task, node, onSelect, onClose, place, onMove }: { task: CampaignTask; node: CampaignNode; onSelect: (id: string) => void;
-  onClose: () => void; place: Place | null; onMove: (p: Place | null) => void }) {
+function Details({ task, node, onSelect, onClose, place, onMove, reveal }: { task: CampaignTask; node: CampaignNode; onSelect: (id: string) => void;
+  onClose: () => void; place: Place | null; onMove: (p: Place | null) => void; reveal: boolean }) {
   const { t } = useLang();
   const isBest = bestNode(task)?.id === node.id;
   const v = versusParent(task, node);
@@ -254,10 +311,10 @@ function Details({ task, node, onSelect, onClose, place, onMove }: { task: Campa
     return () => removeEventListener('keydown', key);
   }, [onClose]);
   // Under the curve, a newly picked session's details are scrolled up until their first part shows, no further,
-  // so that the lineage and the curve stay in sight as far as they can.
+  // so that the lineage and the curve stay in sight as far as they can; those shown by default are not.
   useEffect(() => {
     const stage = box.current?.closest('.campaign-stage');
-    if (place || !box.current || !stage) return;
+    if (!reveal || place || !box.current || !stage) return;
     const over = box.current.getBoundingClientRect().top - (stage.getBoundingClientRect().bottom - SHOWN);
     if (over > 0) stage.scrollBy({ top: over, behavior: 'smooth' });
   }, [node.id, place]);
@@ -309,7 +366,8 @@ function Details({ task, node, onSelect, onClose, place, onMove }: { task: Campa
           {children.map(c => <button key={c.id} className="float-chip" onClick={() => onSelect(c.id)}>{c.id}</button>)}</>}
       </div>
       <div className="float-tiles">
-        <div><span>{t('Agent time')}</span><b>{minutes(node.agentSeconds)}</b></div>
+        <div><span><i className="phase-dot develop" />{t('Development')}</span><b>{minutes(node.agentSeconds)}</b></div>
+        <div><span><i className="phase-dot check" />{t('Validation')}</span><b>{minutes(node.checkSeconds ?? null)}</b></div>
         <div><span>{t('Wall time')}</span><b>{minutes(node.wallSeconds)}</b></div>
         <div><span>{t('Cost')}</span><b>{node.cost != null ? `$${node.cost.toFixed(2)}` : '-'}</b></div>
       </div>
@@ -393,6 +451,7 @@ function Campaign() {
   const [token] = useState(readToken);
   const [data, setData] = useState<CampaignSnapshot | null>(null);
   const [chosen, setChosen] = useState<{ task: string; id: string | null } | null>(null);
+  const [hidden, setHidden] = useState(false);   // the details closed; they show again on the next pick
   const [current, setCurrent] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [paused, setPaused] = useState(false);
@@ -426,11 +485,16 @@ function Campaign() {
   const dragged = useRef(false);   // a drag ends with a click on the circle; that click is not a pick
   const pick: Pick = (task, id) => {
     if (dragged.current) { dragged.current = false; return; }
-    setChosen(id ? { task, id } : null); setCurrent(task); if (id && !chosen) setPlace(null);
+    setChosen(id ? { task, id } : null); setCurrent(task); setHidden(false); if (id && !chosen) setPlace(null);
+    // the session the pane follows anyway, clicked, keeps the pane following
+    const shown = tasks.find(x => x.name === task), target = id && shown && id === followed(shown)?.id ? null : id;
+    if (id && (panes[task]?.id ?? null) !== target) setPane(task, { id: target, mode: 'log' });
   };
-  // Drag a circle onto the analysis area to analyse that session; the drop is kept per task.
+  // The pane beside the lineage: per task, the session the reader put there (by a click, or a drop that also
+  // opens its analysis), or none to follow the one running; and whether it shows the log or the analysis.
   const api = useMemo(() => vistaApi(token), [token]);
-  const [analysed, setAnalysed] = useState<Record<string, string>>({});
+  const [panes, setPanes] = useState<Record<string, PaneState>>({});
+  const setPane = (task: string, next: Partial<PaneState>) => setPanes(all => ({ ...all, [task]: { ...(all[task] ?? { id: null, mode: 'log' }), ...next } }));
   const [drag, setDrag] = useState<{ task: string; id: string; x: number; y: number; over: boolean } | null>(null);
   const grab: Grab = (task, id, down) => {
     const from = { x: down.clientX, y: down.clientY };
@@ -445,17 +509,21 @@ function Campaign() {
       removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
       if (!moving) return;
       dragged.current = true; setTimeout(() => { dragged.current = false; }, 0);
-      if (e.type === 'pointerup' && overArea(e.clientX, e.clientY)) setAnalysed(a => ({ ...a, [task]: id }));
+      if (e.type === 'pointerup' && overArea(e.clientX, e.clientY)) setPane(task, { id, mode: 'analysis' });
       setDrag(null);
     };
     addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   };
-  const close = useCallback(() => { setChosen(null); setPlace(null); }, []);
+  const close = useCallback(() => { setChosen(null); setPlace(null); setHidden(true); }, []);
   const stage = useRef<HTMLDivElement>(null);
-  const details = chosenTask && chosenNode && <Details task={chosenTask} node={chosenNode} onSelect={id => pick(chosenTask.name, id)}
-    onClose={close} place={place} onMove={setPlace} />;
+  // Until a circle is picked, the details are those of the session the pane beside shows.
+  const paneId = shownTask ? panes[shownTask.name]?.id : null;
+  const paneNode = shownTask ? (paneId ? shownTask.nodes.find(n => n.id === paneId) : null) ?? followed(shownTask) : null;
+  const detailTask = chosenNode ? chosenTask : shownTask, detailNode = chosenNode ?? (hidden ? null : paneNode);
+  const details = detailTask && detailNode && <Details task={detailTask} node={detailNode} onSelect={id => pick(detailTask.name, id)}
+    onClose={close} place={place} onMove={setPlace} reveal={!!chosenNode} />;
   const switchTo = (name: string) => {
-    if (name !== shownTask?.name) { close(); stage.current?.scrollTo({ top: 0 }); }
+    if (name !== shownTask?.name) { setChosen(null); setPlace(null); stage.current?.scrollTo({ top: 0 }); }
     setCurrent(name);
   };
   // Open on a running task when there is one, and stay on it.
@@ -489,17 +557,24 @@ function Campaign() {
       <span><i className="hollow" />{t('Not valid')}</span>
       <span><i className="hollow flagged" />{t('Flagged (e.g. hacking), not ranked')}</span>
       <span><i className="ring" />{t('Best')}</span>
+      <span title={t('The ring round a session fills, from twelve o’clock, as it uses its time limit; the dashed rest is unused.')}>
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" className="tree-budget" />
+          <path d={arc(8, 8, 6, 0, 0.45)} className="tree-time develop" /><path d={arc(8, 8, 6, 0.45, 0.6)} className="tree-time check" /></svg>
+        {t('Time used of its limit')}</span>
+      <span><i className="phase develop" />{t('Development')}</span>
+      <span><i className="phase check" />{t('Validation')}</span>
       <span><i className="line" />{t('Best so far')}</span>
     </div>
     <main>
       <div className="campaign-stage" ref={stage}>
         {shownTask ? <>
           <div className="task-column" style={{ width: `min(100%, ${panelWidth(shownTask, t)}px)` }}>
-            <TaskPanel key={shownTask.name} task={shownTask} selected={chosen?.task === shownTask.name ? chosen.id : null} onPick={pick} onGrab={grab} />
+            <TaskPanel key={shownTask.name} task={shownTask} selected={detailTask?.name === shownTask.name ? detailNode?.id ?? null : null} onPick={pick} onGrab={grab} />
             {!place && details}
           </div>
-          <SessionVista task={shownTask} api={api} node={shownTask.nodes.find(n => n.id === analysed[shownTask.name]) ?? null}
-            over={!!drag?.over} dragging={drag?.task === shownTask.name ? drag.id : null} />
+          <SessionPane task={shownTask} api={api} state={panes[shownTask.name] ?? { id: null, mode: 'log' }}
+            onChange={next => setPane(shownTask.name, next)} over={!!drag?.over} dragging={drag?.task === shownTask.name ? drag.id : null}
+            mark={n => <SessionMark task={shownTask} node={n} />} />
         </> : <div className="empty-state">{t('Waiting for the first snapshot.')}</div>}
       </div>
       {place && details}

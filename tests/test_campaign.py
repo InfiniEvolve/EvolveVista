@@ -157,6 +157,23 @@ class ServerTest(unittest.TestCase):
         connection.close()
         self.assertEqual(self.get("/api/campaign/events?token=wrong")[0], 403)
 
+    def test_each_session_has_its_time_limit_validation_time_and_phase(self):
+        sessions = self.campaign / "tasks" / "golf" / "sessions"
+        write(sessions / "s001" / "input" / "spec.json", {"session_id": "s001", "time_limit_seconds": 600})
+        node = json.loads((sessions / "s001" / "node.json").read_text())
+        write(sessions / "s001" / "node.json", {**node, "timing": {"agent_seconds": 300, "evaluate_seconds": 42}})
+        write(sessions / "s004" / "input" / "spec.json", {"session_id": "s004", "index": 4, "parent_id": "s001", "time_limit_seconds": 900})
+        status, headers, body = self.get("/api/campaign", **{HEADER: "t0ken"})
+        nodes = {n["id"]: n for n in json.loads(body)["tasks"][0]["nodes"]}
+        self.assertEqual((nodes["s001"]["timeLimitSeconds"], nodes["s001"]["checkSeconds"], nodes["s001"]["phase"]), (600, 42, None))
+        self.assertEqual((nodes["s004"]["timeLimitSeconds"], nodes["s004"]["phase"]), (900, "develop"))
+        write(sessions / "s004" / "raw" / "final.patch", "diff")   # the agent ended; its work is evaluated
+        status, _, body = self.get("/api/campaign", **{HEADER: "t0ken", "If-None-Match": headers["ETag"]})
+        self.assertEqual(status, 200, "a session moving to validation is a change")
+        s004 = json.loads(body)["tasks"][0]["nodes"][-1]
+        self.assertEqual(s004["phase"], "check")
+        self.assertTrue(s004["developedAt"])
+
     def test_what_is_refused(self):
         self.assertEqual(self.get("/api/campaign")[0], 403, "no token")
         self.assertEqual(self.get("/api/campaign", **{HEADER: "wrong"})[0], 403)
@@ -201,6 +218,22 @@ class VistaTest(ServerTest):
     def vista(self, route="", session="s001"):
         status, _, body = self.get(f"/api/campaign/vista{route}?task=golf&session={session}", **{HEADER: "t0ken"})
         return status, json.loads(body)
+
+    def test_a_sessions_log_is_read_from_its_end_and_followed(self):
+        status, part = self.vista("/log")
+        self.assertEqual(status, 200)
+        self.assertEqual([(e["k"], e["t"]) for e in part["entries"]], [("meta", "Started · m"), ("say", "I shortened the loop."), ("end", "Finished")])
+        log = self.campaign / "tasks" / "golf" / "sessions" / "s001" / "raw" / "agent.jsonl"
+        with open(log, "a") as f:   # a tool call, its result, and half a line still being written
+            f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}}) + "\n")
+            f.write(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "a.py", "is_error": True}]}}) + "\n")
+            f.write('{"type": "assis')
+        status, _, body = self.get(f"/api/campaign/vista/log?task=golf&session=s001&from={part['offset']}", **{HEADER: "t0ken"})
+        later = json.loads(body)
+        self.assertEqual(later["entries"], [{"k": "tool", "t": "Bash: ls"}, {"k": "out", "t": "a.py", "err": True}])
+        self.assertEqual(later["offset"], log.stat().st_size - len('{"type": "assis'), "the half line is read next time")
+        self.assertEqual(self.vista("/log", session="s002")[1]["exists"], False)
+        self.assertEqual(self.vista("/log", session="nope")[0], 404)
 
     def test_a_session_is_extracted_compiled_and_kept(self):
         self.assertEqual(self.vista()[1]["log"], True)

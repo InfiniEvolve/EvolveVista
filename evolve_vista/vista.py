@@ -376,6 +376,7 @@ def handle(server, method: str, route: str, query: dict, read_body) -> tuple:
         GET  ?task=&session=               whether the session was analysed, and its agent's job
         GET  /timeline?task=&session=      its extracted timeline, for a model the page asks
         GET  /graph?task=&session=         the compiled trajectory graph
+        GET  /log?task=&session=&from=     the session's own agent log from byte from on (-1: its end)
         POST /build?task=&session=         compile the analysis in the body (strict=0: allow reading gaps)
         POST /agent?task=&session=&analyst=   start an agent; the body is {"facts", "model", "effort"}
         POST /agent/stop?task=&session=    stop it
@@ -394,6 +395,13 @@ def handle(server, method: str, route: str, query: dict, read_body) -> tuple:
         elif method == "GET" and route == "/timeline":
             with server.vista_lock:
                 answer = timeline(root, task, session)
+        elif method == "GET" and route == "/log":
+            from . import sessions   # here, not above: check.py imports this file outside its package
+            try:
+                start = int((query.get("from") or ["-1"])[0])
+            except ValueError:
+                start = -1
+            answer = sessions.read_log(session_dir(root, task, session), start)
         elif method == "GET" and route == "/graph":
             return 200, graph(root, task, session)
         elif method == "POST" and route == "/build":

@@ -1,5 +1,4 @@
 {
- "Agent time": "agent 用时",
  "Best": "最好",
  "Best so far": "当前最好",
  "Best value after each session": "每次会话后的最好值",
@@ -63,7 +62,6 @@
  "Waiting for the model…": "正在等待模型…",
  "Analyse again": "重新分析",
  "Drop {session} here to analyse its trace": "松开，分析 {session} 的轨迹",
- "Drag a circle of the lineage here to analyse that session’s trace with TraceVista.": "把谱系图里的圆圈拖到这里，用 TraceVista 分析这个会话的轨迹。",
  "Reading the session…": "正在读取会话…",
  "This session has no agent log, so there is no trace to analyse. The baseline runs no agent.": "这个会话没有 agent 日志，没有轨迹可分析。基线不运行 agent。",
  "The analysis compiled, but the model left reading gaps that the compiler reports. Analyse again for a fuller reading.": "分析已编译，但模型漏写了一部分阅读说明（编译器报告的缺口）。重新分析可以得到更完整的说明。",
@@ -113,5 +111,23 @@
  "The campaign keeps running; only this page stops updating.": "campaign 会继续运行，只是这个页面停止更新。",
  "Waiting": "等待中",
  "Drag out to float": "拖出来变成浮窗",
- "Put back under the curve": "放回曲线图下面"
+ "Put back under the curve": "放回曲线图下面",
+ "Analyse with TraceVista": "用 TraceVista 解析",
+ "Back to the log": "返回日志",
+ "Developing": "开发中",
+ "Development": "开发",
+ "Read this session’s log into a TraceVista state map": "把这个会话的日志解析为 TraceVista 状态图",
+ "Reading the log…": "正在读取日志…",
+ "Session log": "会话日志",
+ "The agent has ended; its work is being validated.": "agent 已结束，正在验证它的成果。",
+ "The agent has not written its log yet. Some adapters deliver it only when the session ends.": "agent 还没有写日志。有些适配器要到会话结束才会交回日志。",
+ "The baseline runs no agent, so it has no log.": "基线不运行 agent，因此没有日志。",
+ "The log is long; it is shown from near its end.": "日志较长，从接近末尾处开始显示。",
+ "The ring round a session fills, from twelve o’clock, as it uses its time limit; the dashed rest is unused.": "会话外圈从十二点方向起随用时填满：实线为已用时间，虚线为时限内尚未用到的部分。",
+ "The session is being measured again.": "这个会话正在复测。",
+ "This session has no agent log.": "这个会话没有 agent 日志。",
+ "Time used of its limit": "已用时间 / 时限",
+ "Validating": "验证中",
+ "Validation": "验证",
+ "limit {time}": "时限 {time}"
 }

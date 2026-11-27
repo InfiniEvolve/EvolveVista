@@ -34,6 +34,11 @@ export interface AgentJob { analyst: string; label: string; state: 'running' | '
   error: string | null; note: string | null; elapsed: number; activity: string[] }
 export interface VistaTimeline { task: string; session: string; events: number; first: string | null; last: string | null; parts: string[]; characters: number }
 export interface BuildResult { ok: boolean; error?: string }
+/** One thing a session's agent did, as the server reads it from the log (sessions.py): k is say, think, tool,
+ * out (a tool's result; err a failure), meta, end or raw (a line that is not JSON). */
+export interface LogEntry { k: 'say' | 'think' | 'tool' | 'out' | 'meta' | 'end' | 'raw'; t: string; err?: boolean }
+/** offset: where the next read starts; more: there is more to read at once; cut: the start was skipped. */
+export interface LogPart { exists: boolean; entries: LogEntry[]; offset: number; size: number; cut: boolean; more: boolean }
 
 /** The campaign server's analysis endpoints, with the page's token. */
 export function vistaApi(token: string) {
@@ -54,6 +59,8 @@ export function vistaApi(token: string) {
       { method: 'POST', body: JSON.stringify({ facts, model, effort }), headers: { 'content-type': 'application/json' } }, { analyst }),
     stopAgent: (task: string, session: string) => call<AgentJob>('/agent/stop', task, session, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } }),
     timeline: (task: string, session: string) => call<VistaTimeline>('/timeline', task, session),
+    /** The session's own agent log from byte offset on; -1 for its last part. */
+    log: (task: string, session: string, offset = -1) => call<LogPart>('/log', task, session, {}, { from: String(offset) }),
     graph: async (task: string, session: string) => {
       const res = await fetch(`/api/campaign/vista/graph?${new URLSearchParams({ task, session })}`, { headers: { [HEADER]: token } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

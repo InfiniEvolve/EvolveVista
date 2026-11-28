@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CampaignNode, CampaignTask } from './campaign';
 import { campaignFacts, generate, LOOSE_AFTER, OUTPUT_TOKENS, SYSTEM, userMessage, type AgentJob, type Analyst, type LogEntry, type Progress, type VistaApi, type VistaStatus, type VistaTimeline } from './campaign-vista';
 import { useLang } from './i18n';
-import ApiCharts from './ApiCharts';
 import { parseGraph } from '@tracevista/model';
 import ProviderPicker from '@tracevista/ProviderPicker';
 import { canListModels, changeEndpoint, listModels, presetOf, requestReady, restoreSettings, safeError, selectedPreset, switchPreset, type ChatSettings, type ModelInfo } from '@tracevista/providers';
@@ -126,7 +125,7 @@ const MAX_ENTRIES = 2000;   // a two-hour session writes thousands of steps; the
 
 /** A session's agent log as it is written: what the agent says, the tools it calls and what they return,
  * newest last. It follows the end unless the reader scrolled up. */
-function LiveLog({ api, task, session, running }: { api: VistaApi; task: string; session: string; running: boolean }) {
+export function LiveLog({ api, task, session, running }: { api: VistaApi; task: string; session: string; running: boolean }) {
   const { t } = useLang();
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [dropped, setDropped] = useState(0);
@@ -171,27 +170,16 @@ function LiveLog({ api, task, session, running }: { api: VistaApi; task: string;
   </div>;
 }
 
-/** Room beside a task for one session's TraceVista analysis: drop a circle of the lineage here. */
-export default function SessionVista({ task, node, api, over, dragging }: { task: CampaignTask; node: CampaignNode | null; api: VistaApi;
-  over: boolean; dragging: string | null }) {
+/** One session's TraceVista analysis, in the pane beside the lineage: the analysis when there is one, else
+ * the choice of who writes it, then their progress. It waits for the session to end: the trace is not complete
+ * before then. */
+export default function SessionVista({ task, node, api }: { task: CampaignTask; node: CampaignNode; api: VistaApi }) {
   const { t } = useLang();
   const [stage, setStage] = useState<Stage>({ kind: 'idle' });
   const [settings, setSettings] = useState<ChatSettings>(loadSettings);
   const [again, setAgain] = useState(0);
   const running = useRef<AbortController | null>(null);
-  // A session still running shows its agent log as it is written; one that ended shows its analysis, or its log
-  // when the reader asks. An analysis waits for the end: the trace is not complete before then.
-  const sessionLive = node?.status === 'running' || node?.status === 'prepared';
-  const [view, setView] = useState<'analysis' | 'log' | null>(null);
-  const [ended, setEnded] = useState(false);
-  const wasLive = useRef(sessionLive);
-  useEffect(() => { setView(null); setEnded(false); wasLive.current = sessionLive; }, [task.name, node?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    // the session ended while its log was open: keep the log in view and offer the analysis
-    if (wasLive.current && !sessionLive) { setEnded(true); setView(v => v ?? 'log'); }
-    wasLive.current = sessionLive;
-  }, [sessionLive]);
-  const showLog = sessionLive || view === 'log';
+  const sessionLive = node.status === 'running' || node.status === 'prepared';
   useEffect(() => saveSettings(settings), [settings]);
   // The agents the serving machine offers; the reader picks one, or a model asked from this browser.
   const [analysts, setAnalysts] = useState<Analyst[] | null>(null);
@@ -215,7 +203,7 @@ export default function SessionVista({ task, node, api, over, dragging }: { task
 
   useEffect(() => {
     running.current?.abort(); running.current = null;
-    if (!node || sessionLive) { setStage({ kind: 'idle' }); return; }
+    if (sessionLive) { setStage({ kind: 'idle' }); return; }
     let live = true;
     setStage({ kind: 'loading' });
     api.status(task.name, node.id).then(async (s: VistaStatus) => {
@@ -227,12 +215,12 @@ export default function SessionVista({ task, node, api, over, dragging }: { task
       if (live) setStage({ kind: 'setup', timeline, job: again === 0 ? s.job : null });
     }).catch(e => live && setStage({ kind: 'error', message: t(e instanceof Error ? e.message : String(e)) }));
     return () => { live = false; };
-  }, [api, task.name, node?.id, again, sessionLive]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [api, task.name, node.id, again, sessionLive]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => running.current?.abort(), []);
   // An agent runs on the server; ask how it is doing every two seconds, also after a reload.
   const agentRunning = stage.kind === 'agent' && stage.job.state === 'running';
   useEffect(() => {
-    if (!agentRunning || !node) return;
+    if (!agentRunning) return;
     const timer = window.setInterval(() => {
       api.status(task.name, node.id).then(s => {
         const job = s.job;
@@ -243,22 +231,19 @@ export default function SessionVista({ task, node, api, over, dragging }: { task
       }).catch(() => { /* the next tick tries again */ });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [agentRunning, api, task.name, node?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [agentRunning, api, task.name, node.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const startAgent = (timeline: VistaTimeline, analyst: Analyst) => {
-    if (!node) return;
     api.startAgent(task.name, node.id, analyst.id, campaignFacts(task, node), chosenOptions.model.trim(), chosenOptions.effort)
       .then(job => setStage({ kind: 'agent', job }))
       .catch(e => setStage({ kind: 'error', timeline, message: t(e instanceof Error ? e.message : String(e)) }));
   };
   const stopAgent = () => {
-    if (!node) return;
     api.stopAgent(task.name, node.id).then(job => api.timeline(task.name, node.id).then(timeline => setStage({ kind: 'setup', timeline, job })))
       .catch(e => setStage({ kind: 'error', message: t(e instanceof Error ? e.message : String(e)) }));
   };
 
   const start = (timeline: VistaTimeline) => {
-    if (!node) return;
     const controller = new AbortController();
     running.current = controller;
     setStage({ kind: 'running', timeline, progress: { round: 1, phase: 'waiting', characters: 0, sent: 0, received: 0 } });
@@ -270,30 +255,17 @@ export default function SessionVista({ task, node, api, over, dragging }: { task
   };
   const stop = () => { running.current?.abort(); running.current = null; setStage(s => s.kind === 'running' ? { kind: 'setup', timeline: s.timeline } : s); };
 
-  const inputTokens = (timeline: VistaTimeline) => estimate(SYSTEM.length + userMessage(task, node!, timeline).length);
+  const inputTokens = (timeline: VistaTimeline) => estimate(SYSTEM.length + userMessage(task, node, timeline).length);
   const phase = (p: Progress) => p.phase === 'compiling' ? t('Compiling the analysis…') : p.phase === 'fixing' ? t('The compiler objected; asking the model to fix it…')
     : p.phase === 'answering' ? t('The model is writing the analysis…') : p.phase === 'thinking' ? t('The model is thinking…') : t('Waiting for the model…');
 
-  return <aside className={`task-vista${over ? ' over' : ''}${dragging ? ' armed' : ''}`} aria-label={t('Session analysis')}>
-    <header>
-      <span className="eyebrow">{t('Session analysis')}</span>{node && <b>{node.id}</b>}
-      {node && sessionLive && <span className="live-badge">{node.status === 'prepared' ? t('submitted') : t('running')}</span>}
-      {node && !sessionLive && !dragging && stage.kind !== 'nolog' && stage.kind !== 'loading' && <span className="vista-views" role="group">
-        <button className={showLog ? '' : 'on'} aria-pressed={!showLog} onClick={() => setView('analysis')}>{t('Analysis')}</button>
-        <button className={showLog ? 'on' : ''} aria-pressed={showLog} onClick={() => setView('log')}>{t('Agent log')}</button></span>}
-      {node && !showLog && stage.kind === 'ready' && <button className="vista-again" onClick={() => setAgain(n => n + 1)}>{t('Analyse again')}</button>}
-    </header>
-    {dragging ? <div className="vista-drop">{t('Drop {session} here to analyse its trace', { session: dragging })}</div>
-      : !node ? <div className="task-vista-empty">{t('Drag a circle of the lineage here to analyse that session’s trace with TraceVista.')}</div>
-      : showLog ? <div className="vista-agent">
-        {sessionLive ? <p className="vista-meta">{t('{session} is still running. Its agent log appears here as it is written. The analysis can be started once the session ends, when its trace is complete.', { session: node.id })}</p>
-          : ended ? <div className="vista-ended"><span>{t('{session} has ended.', { session: node.id })}</span>
-            <button className="vista-go" onClick={() => { setEnded(false); setView('analysis'); }}>{t('Analyse it')}</button></div> : null}
-        <ApiCharts api={api} task={task.name} session={node.id} />
-        <LiveLog api={api} task={task.name} session={node.id} running={sessionLive} /></div>
+  return <div className="vista-body">
+    {sessionLive ? <div className="task-vista-empty">{t('{session} is still running. The analysis can be started once the session ends, when its trace is complete.', { session: node.id })}</div>
       : stage.kind === 'loading' ? <div className="task-vista-empty">{t('Reading the session…')}</div>
       : stage.kind === 'nolog' ? <div className="task-vista-empty">{t('This session has no agent log, so there is no trace to analyse. The baseline runs no agent.')}</div>
-      : stage.kind === 'ready' ? <>{stage.loose && <div className="vista-warning">{t('The analysis compiled, but the model left reading gaps that the compiler reports. Analyse again for a fuller reading.')}</div>}
+      : stage.kind === 'ready' ? <>
+        <div className="vista-toolbar">{stage.loose ? <span className="vista-warning">{t('The analysis compiled, but the model left reading gaps that the compiler reports. Analyse again for a fuller reading.')}</span> : <span />}
+          <button className="vista-again" onClick={() => setAgain(n => n + 1)}>{t('Analyse again')}</button></div>
         <VistaFrame api={api} task={task.name} session={node.id} /></>
       : stage.kind === 'agent' ? <div className="vista-agent">
         <div className="vista-agent-head">
@@ -361,5 +333,5 @@ export default function SessionVista({ task, node, api, over, dragging }: { task
           </>}
         </>}
       </div>}
-  </aside>;
+  </div>;
 }

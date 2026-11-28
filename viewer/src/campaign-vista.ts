@@ -69,6 +69,7 @@ export function vistaApi(token: string) {
       { method: 'POST', body: JSON.stringify({ facts, model, effort }), headers: { 'content-type': 'application/json' } }, { analyst }),
     stopAgent: (task: string, session: string) => call<AgentJob>('/agent/stop', task, session, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } }),
     timeline: (task: string, session: string) => call<VistaTimeline>('/timeline', task, session),
+    /** The session's own agent log from byte offset on; -1 for its last part. */
     graph: async (task: string, session: string) => {
       const res = await fetch(`/api/campaign/vista/graph?${new URLSearchParams({ task, session })}`, { headers: { [HEADER]: token } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

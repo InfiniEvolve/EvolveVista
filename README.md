@@ -50,13 +50,14 @@ address printed: it carries the token the page needs.
 | | |
 |---|---|
 | **Tasks** | A campaign with several tasks shows them as tabs in the header, each with its state, number of sessions, best value and a small curve. The line under the campaign's name counts the tasks by state. More than six tasks get a filter. |
-| **Lineage** | Every session as a circle, connected to the session it started from. Under it: the value it is ranked by, its change against that parent, and a note (best, running, same work as earlier). Running sessions appear as soon as they are submitted. |
+| **Lineage** | Every session as a circle, connected to the session it started from, the sessions started from one under it, the first straight below and the others to its right. Under it: the value it is ranked by, its change against that parent, and a note (best, running, same work as earlier). Running sessions appear as soon as they are submitted. |
+| **Time** | Each circle's edge is the session's time limit: dashed while unused, solid as the session uses it, from twelve o'clock. **Violet** is development, the agent at work; **teal** is validation, its work evaluated or measured again. A running session's ring grows as it runs; one that took longer than its limit (validation comes after it) fills the ring, each phase in proportion. |
 | **Best-so-far curve** | Each session's value in archive order, the best reached so far, and the reference it is read against. A ratio metric spanning more than a factor of twenty is drawn on a log scale. |
 | **Session details** | Click a circle or a point: its measurements, flags, timing, cost and the report the agent wrote open under the curve. Drag them out by the title bar to float beside the page; ⤓ puts them back. |
-| **Analysis** | Drag a circle onto the analysis area for the session's TraceVista analysis. See [below](#analyse-a-session). |
-| **Agent log** | Drag a session that is still running onto the analysis area to follow its agent as it works: what it says, the tools it calls and what they return, as each step is written. See [below](#follow-a-running-session). |
+| **Session log** | Beside the lineage: the agent log of the running session as it is written (the newest session still developing when several run), with how fast its model answers when it reaches it through OpenRouter. Click a circle for that session's log; click the running session's circle to follow it again. See [below](#follow-a-running-session). |
+| **Analysis** | **Analyse with TraceVista** above the log, or a circle dragged onto it, opens the session's TraceVista analysis once the session has ended. See [below](#analyse-a-session). |
 
-Colours read against the parent: **green** better, **grey** worse or unchanged, **blue** the first measured or
+Colours of a circle read against the parent: **green** better, **grey** worse or unchanged, **blue** the first measured or
 still running. A **gold** ring marks the best. A hollow grey circle is a session that is not valid; a hollow
 **red** one was flagged (such as reward hacking) and is kept out of the ranking.
 
@@ -64,8 +65,8 @@ Everything except the analysis is read from the campaign's archive. No model is 
 
 ## Analyse a session
 
-Drag a circle of the lineage onto the analysis area beside it. The page shows that session's TraceVista
-analysis, the same state map the TraceVista skill makes, inside the TraceVista viewer. First the server extracts
+Click **Analyse with TraceVista** above a session's log, or drag a circle of the lineage onto the log. The page
+shows that session's TraceVista analysis, the same state map the TraceVista skill makes, inside the TraceVista viewer. First the server extracts
 the session's agent log (`raw/agent.jsonl`, or `raw/agent.log` in runs made by InfiniEvolve's local adapter
 before it adopted that name) with the skill's `extract_timeline.py`: redacted, images omitted.
 Then **Written by** picks who writes the analysis.
@@ -120,26 +121,26 @@ from the browser to the provider; the key stays in the browser. When the server'
 every problem back and asks for a corrected answer, until it compiles or you stop it; it shows the tokens used
 so far.
 
-The result is kept under `<campaign>/vista/<task>/<session>/` and opens at once the next time the session is
-dropped there; **Analyse again** starts anew. A session without an agent log, such as the baseline, has nothing
+The result is kept under `<campaign>/vista/<task>/<session>/` and opens at once the next time it is asked for;
+**Analyse again** starts anew. A session without an agent log, such as the baseline, has nothing
 to analyse.
 
 ## Follow a running session
 
-A session that is still running has no complete trace to analyse yet. Dropped on the analysis area, it shows its
-agent log instead, as the agent writes it (`raw/agent.jsonl`): the agent's text, its thinking where the log
+The area beside the lineage shows the running session's agent log, under its time against its limit (development,
+then validation), as the agent writes it (`raw/agent.jsonl`): the agent's text, its thinking where the log
 keeps it, each tool call with its command or file, each result (cut to 1,500 characters) and every error, a
 subagent's steps indented. The view follows the newest step unless you scroll up; **Jump to the latest** follows
 it again. The page keeps the last 2,000 steps; a new view of a long log starts from its last 400.
 
 The log is redacted with the TraceVista skill's own patterns, those its timeline extraction uses, and the values
 of the server's own credentials (environment variables named like a token, key, secret or password) never
-appear. Analysing waits for the session to end; when it does, the log stays in view with **Analyse it**. A
-finished session can show its log too: **Analysis** and **Agent log** above the area switch between them.
+appear. A running session has no complete trace yet, so **Analyse with TraceVista** waits for it to end. Any
+session's circle, clicked, shows its log here; **Back to the log** returns from its analysis.
 
 ### How fast the agent's model answers
 
-When the agent reaches its model through OpenRouter, the upper half of the area charts each of its calls to the
+When the agent reaches its model through OpenRouter, the area charts each of its calls to the
 model over time, with the log below. One chart shows the **time to first token**, with a rolling median over the
 last 15 calls. The other shows **tokens per second**: tokens over OpenRouter's generation time, with a rolling
 token-weighted rate over the last 15 calls. Each call is a dot, larger for more tokens, because short replies

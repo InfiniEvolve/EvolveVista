@@ -3,7 +3,9 @@
 /* palette: a strong tone for strokes and text, a soft one for fills; amber is the best and the lineage to it */
 .campaign-view{--cv-better:#2b8a68;--cv-better-soft:#e2f3eb;--cv-worse:#7d8590;--cv-worse-soft:#eef0f2;
   --cv-same:#a3a9b0;--cv-same-soft:#f3f4f5;--cv-first:#4a78a8;--cv-first-soft:#e5eef8;--cv-none:#9aa1a9;--cv-none-soft:#f3f4f5;
-  --cv-failed:#c4553f;--cv-failed-soft:#fbe8e3;--cv-best:#d8962b;--cv-best-soft:#fcf1dc;--cv-mark:#8466bf;--cv-edge:#cfd4da}
+  --cv-failed:#c4553f;--cv-failed-soft:#fbe8e3;--cv-best:#d8962b;--cv-best-soft:#fcf1dc;--cv-mark:#8466bf;--cv-edge:#cfd4da;
+  /* a session's time: development (its agent at work), validation (its work evaluated), the limit's unused rest */
+  --cv-develop:#6a55cf;--cv-develop-soft:#ece8fb;--cv-check:#138fa6;--cv-check-soft:#e0f3f6;--cv-budget:#c3c8cf}
 .campaign-view main{min-height:0;flex-direction:column}
 .campaign-legend{display:flex;flex-wrap:wrap;gap:14px;padding:7px 20px;border-bottom:1px solid var(--line);background:var(--surface);font-size:11px;color:var(--text-2)}
 .campaign-legend span{display:flex;align-items:center;gap:6px}
@@ -12,10 +14,14 @@
 .campaign-legend i.hollow.flagged{border-color:var(--cv-failed)}
 .campaign-legend i.ring{border:2.5px solid var(--cv-best);background:transparent}
 .campaign-legend i.line{width:18px;height:2.5px;border:0;border-radius:2px;background:var(--cv-best)}
+.campaign-legend i.phase{width:16px;height:4px;border:0;border-radius:2px}
+.campaign-legend i.phase.develop,.phase-dot.develop{background:var(--cv-develop)}
+.campaign-legend i.phase.check,.phase-dot.check{background:var(--cv-check)}
+.phase-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px}
 .campaign-stage{flex:1;min-height:0;min-width:0;overflow:auto;padding:14px 18px 40px;display:flex;flex-wrap:wrap;align-items:stretch;align-content:flex-start;gap:16px;background:var(--canvas)}
 .campaign-stage>.task-column{align-self:flex-start;flex-shrink:0;display:flex;flex-direction:column;gap:12px}
 .task-vista{flex:1 1 360px;min-width:300px;min-height:420px;display:flex;flex-direction:column;border:1.5px dashed var(--line-strong);border-radius:10px;background:var(--surface-2)}
-.task-vista header{display:flex;align-items:baseline;justify-content:flex-start;gap:10px;padding:10px 14px;border-bottom:1px dashed var(--line-strong);background:transparent}
+.task-vista header{display:flex;align-items:center;justify-content:flex-start;gap:10px;padding:10px 14px;border-bottom:1px dashed var(--line-strong);background:transparent}
 .task-vista header b{font-size:13px;font-variant-numeric:tabular-nums}
 .task-vista-empty{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;font-size:12px;color:var(--text-3)}
 .task-panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;min-width:0;scroll-margin-top:14px}
@@ -32,7 +38,13 @@
 .tree-edge.to-best{stroke:var(--cv-best);stroke-width:2.4}
 .tree-edge.running{stroke-dasharray:5 4}
 .tree-node{cursor:pointer}
-.tree-node.pending circle{animation:campaign-pulse 1.6s ease-in-out infinite}
+.tree-node.pending:not(.ticking) .tree-dot{animation:campaign-pulse 1.6s ease-in-out infinite}
+/* the ring of time: the limit dashed, the time used solid in its phase's colour; the part still growing pulses */
+.tree-budget{fill:none;stroke:var(--cv-budget);stroke-width:1.4;stroke-dasharray:2.2 2.6}
+.tree-time{fill:none;stroke-width:3.2;stroke-linecap:butt}
+.tree-time.develop{stroke:var(--cv-develop)}
+.tree-time.check{stroke:var(--cv-check)}
+.tree-time.live{animation:campaign-pulse 1.6s ease-in-out infinite}
 .tree-number{font-size:12px;font-weight:650;font-variant-numeric:tabular-nums;pointer-events:none}
 /* a session's words, centred under its circle and wrapped at the column's width */
 .tree-words{overflow:visible}
@@ -43,8 +55,8 @@
 .tree-label em{font-style:normal;font-weight:600}
 .tree-note-best{color:#a3680f;font-weight:600}
 .tree-best{fill:none;stroke:var(--cv-best);stroke-width:2.5}
-.tree-selected{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:3 3}
-@media (prefers-reduced-motion:reduce){.tree-node.pending circle{animation:none}}
+.tree-selected{fill:#e3ecfb}
+@media (prefers-reduced-motion:reduce){.tree-node.pending:not(.ticking) .tree-dot,.tree-time.live{animation:none}}
 .curve svg{display:block}
 .curve-grid{stroke:var(--line);stroke-width:1}
 .curve-reference{stroke:var(--text-3);stroke-dasharray:4 4;stroke-width:1}
@@ -133,7 +145,7 @@
 .float-gap{margin-left:10px}
 .float-chip{font-size:11px;padding:1px 8px;border-radius:6px;border:1px solid var(--line-strong);background:var(--surface);color:var(--text);font-variant-numeric:tabular-nums;cursor:pointer}
 .float-chip:hover{border-color:var(--cv-first);color:var(--cv-first);background:var(--cv-first-soft)}
-.float-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0 4px}
+.float-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(76px,1fr));gap:8px;margin:12px 0 4px}
 .float-tiles div{background:var(--surface-2);border-radius:8px;padding:7px 10px;display:flex;flex-direction:column}
 .float-tiles span{font-size:10px;color:var(--text-3)}
 .float-tiles b{font-size:13.5px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
@@ -160,7 +172,48 @@
 .campaign-stage>.task-vista{position:sticky;top:0;align-self:flex-start}
 .task-vista.armed{border-color:var(--cv-first);background:var(--cv-first-soft)}
 .task-vista.armed.over{border-style:solid;box-shadow:inset 0 0 0 2px var(--cv-first)}
-.task-vista header .vista-again{margin-left:auto;font-size:11px;padding:3px 9px}
+.task-vista>header{flex-wrap:wrap;align-items:center;row-gap:6px}
+.vista-again{font-size:11px;padding:3px 9px;flex-shrink:0}
+.pane-badge{font-size:10.5px;font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid}
+.pane-badge.develop{color:var(--cv-develop);border-color:var(--cv-develop);background:var(--cv-develop-soft)}
+.pane-badge.check{color:var(--cv-check);border-color:var(--cv-check);background:var(--cv-check-soft)}
+.task-vista header .pane-switch{font-size:11.5px;padding:4px 11px}
+.pane-mark{flex-shrink:0;display:block}
+.pane-mark .tree-time{stroke-width:2.6}
+/* the session's log: its time, then what the agent did */
+.vista-body{flex:1;min-height:0;display:flex;flex-direction:column}
+.vista-toolbar{display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid var(--line)}
+.vista-toolbar>span{flex:1;min-width:0}
+.vista-toolbar .vista-warning{padding:4px 8px;border-radius:6px}
+.pane-log{flex:1;min-height:0;display:flex;flex-direction:column}
+.pane-time{padding:10px 14px 8px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.pane-time-bar{display:flex;height:6px;border-radius:3px;background:repeating-linear-gradient(90deg,var(--cv-budget) 0 4px,transparent 4px 7px);overflow:hidden}
+.pane-time-bar i{display:block;height:100%}
+.pane-time-bar i.develop{background:var(--cv-develop)}
+.pane-time-bar i.check{background:var(--cv-check)}
+.pane-time-bar i.live{animation:campaign-pulse 1.6s ease-in-out infinite}
+.pane-time-words{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:11px;color:var(--text-3)}
+.pane-time-words b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;margin-left:3px}
+.pane-time-limit{margin-left:auto;font-variant-numeric:tabular-nums}
+.pane-phase{padding:6px 14px;font-size:11.5px;font-weight:600;border-top:1px solid var(--line)}
+.pane-phase.check{color:var(--cv-check);background:var(--cv-check-soft)}
+.session-log{flex:1;min-height:0;margin:0;padding:8px 14px 14px;list-style:none;overflow:auto;font-size:12px;line-height:1.6;color:var(--text);background:var(--surface)}
+.session-log>li{padding:3px 0;overflow-wrap:anywhere}
+.session-log pre{margin:0;white-space:pre-wrap;font:11px/1.55 var(--font-mono)}
+.log-say{white-space:pre-wrap;padding:6px 0!important;color:var(--ink)}
+.log-think pre{font-family:var(--font-sans);font-size:11.5px;font-style:italic;color:var(--text-3)}
+.log-tool{display:flex;align-items:baseline;gap:8px;margin-top:4px}
+.log-tool code{font:11px/1.55 var(--font-mono);color:var(--text);min-width:0}
+.log-tag{flex-shrink:0;font-size:10px;font-weight:650;letter-spacing:.3px;padding:0 6px;border-radius:4px;color:var(--cv-develop);background:var(--cv-develop-soft)}
+.log-out{margin-left:12px;padding-left:10px!important;border-left:2px solid var(--line);color:var(--text-2)}
+.log-out pre{color:var(--text-2)}
+.log-out.err{border-left-color:var(--cv-failed)}
+.log-out.err pre{color:var(--cv-failed)}
+.log-out.folded pre,.log-think.folded pre{max-height:6.2em;overflow:hidden;-webkit-mask-image:linear-gradient(#000 60%,transparent)}
+.log-out.folded,.log-think.folded{cursor:pointer}
+.log-meta,.log-end{font-size:10.5px;color:var(--text-3);text-align:center;padding:6px 0!important}
+.log-end{border-top:1px dashed var(--line);margin-top:6px}
+.log-raw{font:11px/1.55 var(--font-mono);color:var(--text-2);white-space:pre-wrap}
 .vista-drop{flex:1;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:var(--cv-first)}
 .vista-frame{flex:1;width:100%;min-height:0;border:0;border-radius:0 0 10px 10px;background:var(--surface)}
 .vista-panel{padding:16px 18px;overflow:auto;font-size:12px;display:flex;flex-direction:column;gap:10px;max-width:720px}

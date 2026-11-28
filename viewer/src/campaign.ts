@@ -11,6 +11,10 @@ export interface CampaignNode {
   flags: CampaignFlag[]; flagsCleared: boolean; void: boolean; excluded: boolean; duplicate: boolean;
   agentSeconds: number | null; wallSeconds: number | null; archivedAt: string | null; error: string | null;
   report: string; cost: number | null; submittedAt?: string | null;
+  /** added by the server from the session's own files (sessions.py); absent from a bare snapshot */
+  timeLimitSeconds?: number | null; checkSeconds?: number | null;
+  /** while running or re-measured: developing (the agent works) or checking (its work is evaluated) */
+  phase?: 'develop' | 'check' | null; developedAt?: string | null;
 }
 export interface CampaignMetric { name: string; direction: 'max' | 'min'; scale: 'ratio' | 'absolute'; format: string; anchor: unknown;
   /** values worth a line on the curve, such as a known best solution's; they never rank */
@@ -96,11 +100,11 @@ export function firstTask(s: CampaignSnapshot): CampaignTask | null {
   return s.tasks.find(t => taskStatus(t) === 'running') ?? s.tasks[0] ?? null;
 }
 
-/** depth: the generation (rows, top to bottom); row: the column a depth-first walk gives it. */
+/** depth: the generation (rows, top to bottom); row: the column, fractional for a parent centred over its children. */
 export interface Placed { id: string; depth: number; row: number }
-/** A tree laid out top to bottom: depth is the generation, columns come from a depth-first walk in archive order,
- * so a parent sits above its first child and a straight line of descent stays straight. Nodes whose parent
- * is unknown start their own tree. */
+/** A tree laid out top to bottom: depth is the generation; leaves take one column each in a depth-first walk in
+ * archive order, and a parent sits centred over its children, so a straight line of descent stays straight.
+ * Nodes whose parent is unknown start their own tree. */
 export function layoutTree(nodes: CampaignNode[]): Placed[] {
   const ids = new Set(nodes.map(n => n.id));
   const children = new Map<string, CampaignNode[]>();
@@ -116,10 +120,8 @@ export function layoutTree(nodes: CampaignNode[]): Placed[] {
   const walk = (n: CampaignNode, depth: number): number => {
     if (seen.has(n.id)) return next;   // a cycle in broken data must not hang the page
     seen.add(n.id);
-    const kids = children.get(n.id) ?? [];
-    let row = next;
-    if (kids.length) row = kids.map(k => walk(k, depth + 1))[0];
-    else next += 1;
+    const rows = (children.get(n.id) ?? []).map(k => walk(k, depth + 1));
+    const row = rows.length ? rows[0] : next++;   // over its first child; the others to its right
     placed.push({ id: n.id, depth, row });
     return row;
   };
@@ -127,6 +129,37 @@ export function layoutTree(nodes: CampaignNode[]): Placed[] {
   for (const n of nodes) if (!seen.has(n.id)) placed.push({ id: n.id, depth: 0, row: next++ });   // unreachable through a cycle
   return placed;
 }
+
+/** A session's time in seconds: developing (its agent at work), then checking (its work evaluated, and any
+ * re-measurement), against its time limit; live while it still grows. now is in milliseconds. */
+export interface TimeUse { develop: number; check: number; limit: number | null; live: 'develop' | 'check' | null }
+export function timeUse(n: CampaignNode, now: number): TimeUse {
+  const limit = typeof n.timeLimitSeconds === 'number' && n.timeLimitSeconds > 0 ? n.timeLimitSeconds : null;
+  const at = (iso: string | null | undefined) => { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) ? t : null; };
+  if (n.status === 'running') {
+    const began = at(n.submittedAt), ended = at(n.developedAt);
+    if (began == null) return { develop: 0, check: 0, limit, live: n.phase === 'check' ? 'check' : 'develop' };
+    if (n.phase === 'check' && ended != null)
+      return { develop: Math.max(0, (ended - began) / 1000), check: Math.max(0, (now - ended) / 1000), limit, live: 'check' };
+    return { develop: Math.max(0, (now - began) / 1000), check: 0, limit, live: 'develop' };
+  }
+  if (n.status === 'prepared') return { develop: 0, check: 0, limit, live: null };
+  return { develop: n.agentSeconds ?? 0, check: n.checkSeconds ?? 0, limit, live: n.status === 'remeasuring' ? 'check' : null };
+}
+/** The parts of a ring of time the two phases fill, in order. scale is the limit, or for a session without one
+ * the longest session of its task; a session that took longer (validation comes after the agent's limit) fills
+ * the whole ring, each phase in proportion. */
+export function ringParts(use: TimeUse, scale: number): { develop: number; check: number } {
+  const whole = Math.max(scale, use.develop + use.check);
+  if (!(whole > 0)) return { develop: 0, check: 0 };
+  return { develop: use.develop / whole, check: use.check / whole };
+}
+
+/** 4:05, or 1:02:03 past an hour */
+export const clock = (seconds: number) => {
+  const s = Math.max(0, Math.floor(seconds)), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+};
 
 /** Tick values for a curve axis: about five round numbers across [lo, hi], or powers of ten on a log axis. */
 export function ticks(lo: number, hi: number, log: boolean): number[] {

@@ -26,7 +26,7 @@ import time
 from typing import Callable, NamedTuple
 from urllib.parse import parse_qs, urlsplit
 
-from . import apistats, campaign, livelog, vista
+from . import apistats, campaign, livelog, sessions, vista
 
 STATIC = Path(__file__).resolve().parent / "static"
 PAGE = "campaign.html"
@@ -81,9 +81,12 @@ class VistaServer(ThreadingHTTPServer):
     def current(self) -> tuple[str, bytes]:
         """(stamp, snapshot JSON), rebuilt only when the campaign changed."""
         with self.lock:
-            if self.cached is None or self.cached[0] != self.reader.stamp(self.campaign):
-                data = self.reader.snapshot(self.campaign)
-                self.cached = (data["stamp"], json.dumps(data, ensure_ascii=False).encode())
+            now = self.reader.stamp(self.campaign) + sessions.stamp(self.campaign)
+            if self.cached is None or self.cached[0] != now:
+                # each session's time limit, validation time and phase, which the readers leave out
+                data = sessions.enrich(self.campaign, self.reader.snapshot(self.campaign))
+                data["stamp"] = now
+                self.cached = (now, json.dumps(data, ensure_ascii=False).encode())
             return self.cached
 
     def server_close(self):
